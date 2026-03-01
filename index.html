@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0" />
+  <title>Wave Runner - Endless Arcade Challenge</title>
+  <meta name="description" content="Navigate twisting corridors with dual physics modes. Collect coins, unlock 20+ skins, and master 12 challenging levels." />
+  <meta name="keywords" content="endless runner, casual game, arcade, reflexes, wave, ship, geometry" />
+  <meta name="theme-color" content="#0a0020" />
+  <meta property="og:title" content="Wave Runner - Endless Arcade Challenge" />
+  <meta property="og:description" content="Switch between Ship and Wave mode to survive endless corridors. Can you beat the highscore?" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%234488ff'/%3E%3Cstop offset='100%25' stop-color='%23aa44ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='url(%23g)'/%3E%3Cpath d='M30 55 L42 35 L54 55 L66 35' stroke='white' stroke-width='6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0a0020;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #loading {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0a0020;
+      color: #fff;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 24px;
+      z-index: 100;
+      transition: opacity 0.5s;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading...</div>
+  <canvas id="game"></canvas>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
