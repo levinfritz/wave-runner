@@ -1,24 +1,28 @@
 import { Game } from './game/Game';
-import { renderHUD } from './ui/HUD';
+import { renderHUD, showToast } from './ui/HUD';
 import { SKINS, TRAILS } from './game/Skins';
 import { LEVELS } from './game/Levels';
+import { ACHIEVEMENTS } from './game/Achievements';
 import {
-  renderMainMenu,
   renderGameOverScreen,
   renderPauseScreen,
-  renderSettingsScreen,
-  renderShopScreen,
-  renderLevelSelectScreen,
-  renderAchievementsScreen,
+  renderMenuScreen,
   updateScreens,
   getButtons,
   scrollShop,
   resetShopScroll,
   setShopTab,
+  navigateTo,
+  getMenuScreen,
+  updateButtonHover,
+  showConfirmDialog,
+  getConfirmDialog,
+  closeConfirmDialog,
+  triggerPriceShake,
 } from './ui/Screens';
 import { loadSave, updateSave, updateSettings } from './utils/Storage';
 import { checkAchievements } from './game/Achievements';
-import { platform } from './platform/SDK';
+import { getPlatform, initPlatform } from './platform/SDK';
 
 // Boot
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -26,8 +30,6 @@ const loading = document.getElementById('loading') as HTMLDivElement;
 const game = new Game(canvas);
 
 let lastTime = performance.now();
-type MenuScreen = 'main' | 'settings' | 'shop' | 'level_select' | 'achievements';
-let menuScreen: MenuScreen = 'main';
 
 // Game loop
 function loop(now: number): void {
@@ -45,29 +47,14 @@ function loop(now: number): void {
 
   // Render UI layers
   if (game.state === 'playing') {
-    renderHUD(game.ctx, game, theme);
+    renderHUD(game.ctx, game, theme, dt);
   } else if (game.state === 'menu') {
-    switch (menuScreen) {
-      case 'settings':
-        renderSettingsScreen(game.ctx, game.width, game.height, theme, loadSave().settings);
-        break;
-      case 'shop':
-        renderShopScreen(game.ctx, game.width, game.height, theme);
-        break;
-      case 'level_select':
-        renderLevelSelectScreen(game.ctx, game.width, game.height, theme);
-        break;
-      case 'achievements':
-        renderAchievementsScreen(game.ctx, game.width, game.height, theme);
-        break;
-      default:
-        renderMainMenu(game.ctx, game.width, game.height, theme);
-    }
+    renderMenuScreen(game.ctx, game.width, game.height, theme, loadSave().settings);
   } else if (game.state === 'dead') {
-    renderHUD(game.ctx, game, theme);
+    renderHUD(game.ctx, game, theme, dt);
     renderGameOverScreen(game.ctx, game.width, game.height, game, theme);
   } else if (game.state === 'paused') {
-    renderHUD(game.ctx, game, theme);
+    renderHUD(game.ctx, game, theme, dt);
     renderPauseScreen(game.ctx, game.width, game.height, theme);
   }
 
@@ -98,6 +85,45 @@ function handleClick(clientX: number, clientY: number): void {
 }
 
 function handleAction(action: string): void {
+  // Close confirm dialog on cancel
+  if (action === 'cancel_purchase') {
+    closeConfirmDialog();
+    return;
+  }
+
+  // Confirmed purchase actions
+  if (action.startsWith('confirm_skin_')) {
+    closeConfirmDialog();
+    const skinId = action.slice(13);
+    const save = loadSave();
+    const skin = SKINS.find(s => s.id === skinId);
+    if (!skin || save.coins < skin.price) return;
+    updateSave({
+      coins: save.coins - skin.price,
+      unlockedSkins: [...save.unlockedSkins, skinId],
+      selectedSkin: skinId,
+    });
+    game.player.skinType = skinId;
+    game.audio.playSFX('purchase_success');
+    return;
+  }
+
+  if (action.startsWith('confirm_trail_')) {
+    closeConfirmDialog();
+    const trailId = action.slice(14);
+    const save = loadSave();
+    const trail = TRAILS.find(t => t.id === trailId);
+    if (!trail || save.coins < trail.price) return;
+    updateSave({
+      coins: save.coins - trail.price,
+      unlockedTrails: [...save.unlockedTrails, trailId],
+      selectedTrail: trailId,
+    });
+    game.player.trailType = trailId;
+    game.audio.playSFX('purchase_success');
+    return;
+  }
+
   // Skin purchase/select
   if (action.startsWith('skin_')) {
     const skinId = action.slice(5);
@@ -110,14 +136,12 @@ function handleAction(action: string): void {
       updateSave({ selectedSkin: skinId });
       game.player.skinType = skinId;
     } else if (save.coins >= skin.price) {
-      // Buy it
-      updateSave({
-        coins: save.coins - skin.price,
-        unlockedSkins: [...save.unlockedSkins, skinId],
-        selectedSkin: skinId,
-      });
-      game.player.skinType = skinId;
-      game.audio.playSFX('coin');
+      // Show confirmation dialog instead of buying directly
+      showConfirmDialog(skin.name, skin.price, `skin_${skinId}`);
+    } else {
+      // Can't afford — shake the price
+      triggerPriceShake(skinId);
+      game.audio.playSFX('purchase_denied');
     }
     return;
   }
@@ -133,13 +157,10 @@ function handleAction(action: string): void {
       updateSave({ selectedTrail: trailId });
       game.player.trailType = trailId;
     } else if (save.coins >= trail.price) {
-      updateSave({
-        coins: save.coins - trail.price,
-        unlockedTrails: [...save.unlockedTrails, trailId],
-        selectedTrail: trailId,
-      });
-      game.player.trailType = trailId;
-      game.audio.playSFX('coin');
+      showConfirmDialog(trail.name, trail.price, `trail_${trailId}`);
+    } else {
+      triggerPriceShake(trailId);
+      game.audio.playSFX('purchase_denied');
     }
     return;
   }
@@ -150,35 +171,35 @@ function handleAction(action: string): void {
     const level = LEVELS[levelIdx];
     if (!level) return;
 
-    menuScreen = 'main';
+    navigateTo('main');
     game.startClassicLevel(levelIdx);
     return;
   }
 
   switch (action) {
     case 'endless':
-      menuScreen = 'main';
+      navigateTo('main');
       game.startGame('endless');
       break;
     case 'daily':
-      menuScreen = 'main';
+      navigateTo('main');
       game.startDaily();
       break;
     case 'level_select':
-      menuScreen = 'level_select';
+      navigateTo('level_select');
       break;
     case 'shop':
-      menuScreen = 'shop';
+      navigateTo('shop');
       resetShopScroll();
       break;
     case 'achievements':
-      menuScreen = 'achievements';
+      navigateTo('achievements');
       break;
     case 'settings':
-      menuScreen = 'settings';
+      navigateTo('settings');
       break;
     case 'back':
-      menuScreen = 'main';
+      navigateTo('main');
       break;
     case 'retry': {
       // Show interstitial ad every 3 deaths
@@ -193,7 +214,7 @@ function handleAction(action: string): void {
         }
       };
       if (shouldShowAd) {
-        platform.showAd('midgame').then(() => doRetry()).catch(() => doRetry());
+        getPlatform().showAd('midgame').then(() => doRetry()).catch(() => doRetry());
       } else {
         doRetry();
       }
@@ -201,9 +222,10 @@ function handleAction(action: string): void {
     }
     case 'menu':
       game.state = 'menu';
-      menuScreen = 'main';
+      navigateTo('main');
       game.onStateChange?.('menu');
       game.audio.stopMusic();
+      game.audio.startMenuMusic();
       break;
     case 'resume':
       game.resume();
@@ -238,22 +260,43 @@ function handleAction(action: string): void {
     case 'tab_trails':
       setShopTab('trails');
       break;
+    case 'rewarded_ad':
+      getPlatform().showAd('rewarded').then(() => {
+        const save = loadSave();
+        updateSave({ coins: save.coins + 50 });
+        game.audio.playSFX('purchase_success');
+      }).catch(() => {
+        // Ad failed or was skipped — no reward
+      });
+      break;
   }
 }
 
-// Register click handlers
+// Button hover tracking
+canvas.addEventListener('mousemove', (e) => {
+  updateButtonHover(e.clientX, e.clientY);
+});
+
+// Register click handlers (prevent double-fire on touch devices)
+let lastInputWasTouch = false;
+
 canvas.addEventListener('click', (e) => {
+  if (lastInputWasTouch) {
+    lastInputWasTouch = false;
+    return; // Skip synthetic click after touch
+  }
   if (game.state !== 'playing') {
     handleClick(e.clientX, e.clientY);
   }
 });
 
 canvas.addEventListener('touchend', (e) => {
+  lastInputWasTouch = true;
   if (game.state !== 'playing') {
     const touch = e.changedTouches[0];
     if (touch) {
       // For shop screen, only treat as click if finger didn't move much (not a scroll)
-      if (game.state === 'menu' && menuScreen === 'shop') {
+      if (game.state === 'menu' && getMenuScreen() === 'shop') {
         const dy = Math.abs(touch.clientY - touchStartY);
         if (dy > 10) return; // was a scroll gesture
       }
@@ -267,7 +310,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (game.state === 'playing') game.pause();
     else if (game.state === 'paused') game.resume();
-    else if (menuScreen !== 'main') menuScreen = 'main';
+    else if (getMenuScreen() !== 'main') navigateTo('main');
   }
   if (e.code === 'Space' || e.key === 'Enter') {
     if (game.state === 'dead') {
@@ -277,7 +320,7 @@ window.addEventListener('keydown', (e) => {
       } else {
         game.startGame(game.mode);
       }
-    } else if (game.state === 'menu' && menuScreen === 'main') {
+    } else if (game.state === 'menu' && getMenuScreen() === 'main') {
       e.preventDefault();
       game.startGame('endless');
     }
@@ -286,7 +329,7 @@ window.addEventListener('keydown', (e) => {
 
 // Scroll handling for shop screen
 canvas.addEventListener('wheel', (e) => {
-  if (game.state === 'menu' && menuScreen === 'shop') {
+  if (game.state === 'menu' && getMenuScreen() === 'shop') {
     e.preventDefault();
     scrollShop(e.deltaY);
   }
@@ -295,7 +338,7 @@ canvas.addEventListener('wheel', (e) => {
 let touchStartY = 0;
 let touchLastY = 0;
 canvas.addEventListener('touchstart', (e) => {
-  if (game.state === 'menu' && menuScreen === 'shop') {
+  if (game.state === 'menu' && getMenuScreen() === 'shop') {
     const touch = e.touches[0];
     if (touch) {
       touchStartY = touch.clientY;
@@ -305,7 +348,7 @@ canvas.addEventListener('touchstart', (e) => {
 }, { passive: true });
 
 canvas.addEventListener('touchmove', (e) => {
-  if (game.state === 'menu' && menuScreen === 'shop') {
+  if (game.state === 'menu' && getMenuScreen() === 'shop') {
     const touch = e.touches[0];
     if (touch) {
       const dy = touchLastY - touch.clientY;
@@ -318,34 +361,77 @@ canvas.addEventListener('touchmove', (e) => {
 
 // SDK lifecycle hooks
 game.onStateChange = (state) => {
+  const sdk = getPlatform();
   if (state === 'playing') {
-    platform.gameplayStart();
+    sdk.gameplayStart();
   } else {
-    platform.gameplayStop();
+    sdk.gameplayStop();
 
     // On death/completion: check achievements and happyTime
     if (state === 'dead') {
       const newAch = checkAchievements();
       if (newAch.length > 0) {
-        platform.happyTime();
+        sdk.happyTime();
+        // Show toast for each newly unlocked achievement
+        for (const achId of newAch) {
+          const ach = ACHIEVEMENTS.find(a => a.id === achId);
+          if (ach) {
+            game.audio.playSFX('achievement_unlock');
+            showToast(`${ach.icon} ${ach.name}`, ach.desc);
+          }
+        }
       }
       if (game.isNewHighScore || game.classicComplete) {
-        platform.happyTime();
+        sdk.happyTime();
       }
     }
   }
 };
 
-// Init platform SDK
-platform.init();
+// Daily login bonus check
+function checkDailyLoginBonus(): void {
+  const save = loadSave();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-// Start
-loading.style.opacity = '0';
-setTimeout(() => loading.remove(), 500);
+  if (save.lastLoginDate === todayStr) return; // Already claimed today
 
-game.corridor.generate(-200, 2000, 0);
-game.player.reset(100, game.height / 2);
-game.camera.x = 0;
-game.camera.y = 0;
+  // Check streak
+  let streak = 1;
+  if (save.lastLoginDate) {
+    const lastDate = new Date(save.lastLoginDate);
+    const diff = Math.floor((today.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (diff === 1) {
+      streak = save.loginStreak + 1;
+    }
+    // If diff > 1, streak resets to 1
+  }
 
-requestAnimationFrame(loop);
+  const bonus = Math.min(200, 50 + streak * 10);
+  updateSave({
+    lastLoginDate: todayStr,
+    loginStreak: streak,
+    coins: save.coins + bonus,
+  });
+  showToast(`Daily Bonus: +${bonus}`, `Login streak: ${streak} day${streak > 1 ? 's' : ''}`);
+}
+
+// Init platform SDK, then start game loop
+initPlatform().then(() => {
+  loading.style.opacity = '0';
+  setTimeout(() => loading.remove(), 500);
+
+  game.corridor.generate(-200, 2000, 0);
+  game.player.reset(100, game.height / 2);
+  game.camera.x = 0;
+  game.camera.y = 0;
+
+  // Start ambient menu music (will init audio on first user interaction)
+  game.audio.init();
+  game.audio.startMenuMusic();
+
+  // Check daily login bonus
+  checkDailyLoginBonus();
+
+  requestAnimationFrame(loop);
+});

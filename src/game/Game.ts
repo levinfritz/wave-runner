@@ -6,10 +6,11 @@ import { ParticleSystem } from './ParticleSystem';
 import { ThemeManager } from '../themes/ThemeManager';
 import { AudioManager } from '../audio/AudioManager';
 import { renderBackground } from './Background';
-import { checkWallCollision, checkObstacleCollision } from './Collision';
+import { checkWallCollision, checkObstacleCollision, checkNearMiss } from './Collision';
 import { updateObstacle, renderObstacle, checkPortalCollision } from './Obstacle';
 import { updateCoin, renderCoin, checkCoinCollision } from './Coin';
 import { LEVELS } from './Levels';
+import { addFloatingText } from '../ui/HUD';
 import { loadSave, updateSave, getTodayString, getDailySeed } from '../utils/Storage';
 
 export type GameState = 'menu' | 'playing' | 'dead' | 'paused';
@@ -59,6 +60,24 @@ export class Game {
   private modeFlashTimer = 0;
   private modeFlashColor = '#ffffff';
   private scanlinePattern: CanvasPattern | null = null;
+
+  // Death slow-motion
+  private deathSlowMoTimer = 0;
+  private readonly DEATH_SLOWMO_DURATION = 0.5;
+  private readonly DEATH_TIME_SCALE = 0.3;
+
+  // Countdown
+  countdownTimer = 0;
+  private countdownPhase = 0; // 3, 2, 1, 0 (go)
+
+  // Near-miss system
+  private nearMissCooldown = 0;
+
+  // Milestone celebrations
+  private lastMilestone = 0;
+  milestoneFlashTimer = 0;
+  milestoneText = '';
+  private readonly MILESTONES = [100, 250, 500, 1000, 2000, 5000];
 
   // Callbacks for UI
   onStateChange: ((state: GameState) => void) | null = null;
@@ -166,6 +185,29 @@ export class Game {
         this.pause();
       }
     });
+
+    // Orientation change - auto-pause
+    window.addEventListener('orientationchange', () => {
+      if (this.state === 'playing') {
+        this.pause();
+      }
+    });
+    if (screen.orientation) {
+      screen.orientation.addEventListener('change', () => {
+        if (this.state === 'playing') {
+          this.pause();
+        }
+      });
+    }
+  }
+
+  /** Haptic feedback (mobile only, fails silently on desktop) */
+  private vibrate(pattern: number | number[]): void {
+    try {
+      navigator.vibrate?.(pattern);
+    } catch {
+      // Not supported — ignore
+    }
   }
 
   startGame(mode: GameMode = 'endless'): void {
@@ -181,6 +223,12 @@ export class Game {
     this.classicComplete = false;
     this.isDailyMode = false;
     this.graceTimer = 0.4;
+    this.deathSlowMoTimer = 0;
+    this.countdownTimer = 2.99; // 3-2-1 countdown (renders "3" at 2.99, "2" at 1.99, etc.)
+    this.countdownPhase = 3;
+    this.nearMissCooldown = 0;
+    this.lastMilestone = 0;
+    this.milestoneFlashTimer = 0;
 
     // Track games played; show tutorial only on very first game ever
     const save = loadSave();
@@ -227,11 +275,43 @@ export class Game {
     this.classicTargetDistance = level.targetDistance;
     this.classicComplete = false;
 
-    // Override speed and difficulty for classic mode
+    // Fixed speed (no acceleration in classic)
     this.baseScrollSpeed = level.speed;
     this.scrollSpeed = level.speed;
-    this.maxScrollSpeed = level.speed; // Fixed speed in classic mode
+    this.maxScrollSpeed = level.speed;
+
+    // Set difficulty and corridor width
     this.levelGen.setFixedDifficulty(level.difficulty);
+    this.corridor.setBaseGap(level.corridorWidth);
+
+    // Portal and mode control
+    if (level.noPortals) this.levelGen.setNoPortals(true);
+    if (level.startMode === 'wave') {
+      this.player.physicsMode = 'wave';
+      this.levelGen.setStartMode('wave');
+    }
+
+    // Regenerate corridor with correct difficulty + width
+    this.corridor.reset(this.height);
+    this.corridor.generate(-200, 1500, level.difficulty);
+
+    // Reposition player in correctly-sized corridor
+    const walls = this.corridor.getWallsAt(100);
+    const spawnY = walls ? (walls.topY + walls.bottomY) / 2 : this.height / 2;
+    this.player.reset(100, spawnY);
+
+    // Regenerate obstacles for correct corridor geometry
+    this.levelGen.reset();
+    this.levelGen.setFixedDifficulty(level.difficulty);
+    if (level.noPortals) this.levelGen.setNoPortals(true);
+    if (level.startMode === 'wave') this.levelGen.setStartMode('wave');
+    this.levelGen.generate(this.player.x, (x) => this.corridor.getWallsAt(x));
+
+    // Snap camera
+    this.camera.x = this.player.x - this.width * 0.3;
+    this.camera.y = this.player.y - this.height / 2;
+    this.camera.targetX = this.camera.x;
+    this.camera.targetY = this.camera.y;
   }
 
   startDaily(): void {
@@ -284,6 +364,31 @@ export class Game {
     }
 
     if (this.state === 'playing') {
+      // Death slow-motion: real-time countdown, slowed game time
+      if (this.deathSlowMoTimer > 0) {
+        this.deathSlowMoTimer -= dt;
+        dt *= this.DEATH_TIME_SCALE;
+        if (this.deathSlowMoTimer <= 0) {
+          this.state = 'dead';
+          this.audio.stopMusic();
+          this.onStateChange?.('dead');
+          return;
+        }
+      }
+
+      // Countdown: render but don't move player
+      if (this.countdownTimer > 0) {
+        this.countdownTimer -= dt;
+        const newPhase = Math.ceil(this.countdownTimer);
+        if (newPhase < this.countdownPhase && newPhase >= 0) {
+          this.countdownPhase = newPhase;
+          this.audio.playSFX('game_start_countdown');
+        }
+        this.gameTime += dt;
+        this.themeManager.update(dt, 0);
+        return;
+      }
+
       this.gameTime += dt;
 
       // Grace period countdown
@@ -306,9 +411,16 @@ export class Game {
       const speedRange = this.maxScrollSpeed - this.baseScrollSpeed;
       const tempoScale = speedRange > 0 ? (this.scrollSpeed - this.baseScrollSpeed) / speedRange : 0;
       this.audio.setTempo(0.8 + tempoScale * 0.6);
+      this.audio.setSpeedPct(tempoScale);
 
       // Update player
       this.player.update(dt, this.isHolding, this.scrollSpeed);
+
+      // Thrust particles when holding
+      if (this.isHolding && this.player.alive && settings.particles && this.deathSlowMoTimer <= 0) {
+        const theme = this.themeManager.blended;
+        this.particles.emitThrust(this.player.x - 12, this.player.y, theme.player.trailColor);
+      }
 
       // Calculate distance in meters
       this.distance = Math.floor(this.player.x / 50);
@@ -331,7 +443,12 @@ export class Game {
           coin.collected = true;
           this.coinsCollected++;
           this.audio.playSFX('coin');
+          this.vibrate(15);
           this.particles.burst(coin.x, coin.y, '#ffcc00', 8);
+          // Floating "+1" text at coin screen position
+          const screenX = coin.x - this.camera.renderX;
+          const screenY = coin.y - this.camera.renderY;
+          addFloatingText('+1', screenX, screenY - 10, '#ffcc00');
         }
       }
 
@@ -343,7 +460,8 @@ export class Game {
           if (this.player.physicsMode !== targetMode) {
             this.player.physicsMode = targetMode;
             this.player.vy = 0; // reset velocity on mode switch
-            this.audio.playSFX('coin'); // reuse coin SFX for portal
+            this.audio.playSFX('portal_transition');
+            this.vibrate([20, 10, 20]);
             const flashColor = obs.type === 'portal_wave' ? '#aa44ff' : '#4488ff';
             this.particles.burst(this.player.x, this.player.y, flashColor, 16);
             this.modeFlashTimer = 0.3;
@@ -363,12 +481,40 @@ export class Game {
         return;
       }
 
-      // Check collisions (skip during grace period)
-      if (this.graceTimer <= 0) {
+      // Check collisions (skip during grace period and death slowmo)
+      if (this.graceTimer <= 0 && this.deathSlowMoTimer <= 0) {
         if (checkWallCollision(this.player, this.corridor, this.height) || checkObstacleCollision(this.player, this.levelGen.obstacles)) {
           this.onDeath();
         }
       }
+
+      // Near-miss detection
+      if (this.nearMissCooldown > 0) {
+        this.nearMissCooldown -= dt;
+      } else if (this.graceTimer <= 0 && this.deathSlowMoTimer <= 0 && this.player.alive) {
+        const nearMiss = checkNearMiss(this.player, this.corridor, this.levelGen.obstacles, this.height);
+        if (nearMiss) {
+          this.audio.playSFX('nearmiss');
+          this.particles.burst(nearMiss.x, nearMiss.y, '#ffffff', 6);
+          this.nearMissCooldown = 0.3;
+        }
+      }
+
+      // Milestone celebrations
+      for (const m of this.MILESTONES) {
+        if (this.distance >= m && this.lastMilestone < m) {
+          this.lastMilestone = m;
+          this.milestoneText = `${m}m!`;
+          this.milestoneFlashTimer = 1.5;
+          this.audio.playSFX('speed_milestone');
+          this.particles.burst(this.player.x, this.player.y, '#ffcc00', 20);
+          if (settings.screenShake) {
+            this.camera.shake(8);
+          }
+          break;
+        }
+      }
+      if (this.milestoneFlashTimer > 0) this.milestoneFlashTimer -= dt;
 
       // Theme transitions
       const distDelta = this.scrollSpeed * dt / 50;
@@ -404,10 +550,12 @@ export class Game {
   private onDeath(): void {
     const theme = this.themeManager.blended;
     this.player.die(theme);
-    this.state = 'dead';
-    this.audio.stopMusic();
     this.audio.playSFX('death');
+    this.vibrate([50, 30, 100]);
     this.deathCount++;
+
+    // Start slow-motion (state transitions to 'dead' when timer expires)
+    this.deathSlowMoTimer = this.DEATH_SLOWMO_DURATION;
 
     if (loadSave().settings.screenShake) {
       this.camera.shake(15);
@@ -441,6 +589,12 @@ export class Game {
       }
     }
 
+    // Add to top runs leaderboard
+    const modeLabel = this.isDailyMode ? 'daily' : this.mode;
+    const topRuns = [...(save.topRuns || []), { distance: this.distance, date: getTodayString(), mode: modeLabel }];
+    topRuns.sort((a, b) => b.distance - a.distance);
+    updates.topRuns = topRuns.slice(0, 10);
+
     updateSave(updates);
 
     // Reset speeds to defaults
@@ -453,7 +607,7 @@ export class Game {
   private onClassicComplete(): void {
     this.state = 'dead'; // Reuse death screen to show results
     this.audio.stopMusic();
-    this.audio.playSFX('highscore');
+    this.audio.playSFX('level_complete');
 
     // Calculate stars based on coins collected
     const level = LEVELS[this.classicLevelIndex];
@@ -482,9 +636,10 @@ export class Game {
     this.isNewHighScore = true; // Reuse flag to show "LEVEL COMPLETE"
     this.onStateChange?.('dead');
 
-    // Reset speeds to defaults for next game
+    // Reset speeds and corridor width to defaults for next game
     this.baseScrollSpeed = 200;
     this.maxScrollSpeed = 400;
+    this.corridor.setBaseGap(220);
   }
 
   render(): void {
@@ -584,6 +739,46 @@ export class Game {
         ctx.fill();
         ctx.globalAlpha = 1;
       }
+    }
+
+    // Countdown overlay
+    if (this.state === 'playing' && this.countdownTimer > 0) {
+      const phase = Math.ceil(this.countdownTimer);
+      const frac = this.countdownTimer - Math.floor(this.countdownTimer);
+      const scale = 1 + (1 - frac) * 0.5;
+      const alpha = frac;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(this.width / 2, this.height * 0.35);
+      ctx.scale(scale, scale);
+      ctx.font = 'bold 72px "Segoe UI", Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 20;
+      ctx.fillText(phase > 0 ? String(phase) : 'GO!', 0, 0);
+      ctx.restore();
+    }
+
+    // Milestone celebration text
+    if (this.milestoneFlashTimer > 0) {
+      const mAlpha = Math.min(1, this.milestoneFlashTimer * 2);
+      const mScale = 1 + (1.5 - this.milestoneFlashTimer) * 0.2;
+
+      ctx.save();
+      ctx.globalAlpha = mAlpha;
+      ctx.translate(this.width / 2, this.height * 0.28);
+      ctx.scale(mScale, mScale);
+      ctx.font = 'bold 36px "Segoe UI", Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffcc00';
+      ctx.shadowColor = '#ffcc00';
+      ctx.shadowBlur = 15;
+      ctx.fillText(this.milestoneText, 0, 0);
+      ctx.restore();
     }
   }
 }

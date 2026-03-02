@@ -1,6 +1,6 @@
 import type { Game, GameState } from '../game/Game';
 import type { GameTheme } from '../themes/themes';
-import { SKINS, TRAILS } from '../game/Skins';
+import { SKINS, TRAILS, getRarity, RARITY_COLORS } from '../game/Skins';
 import { LEVELS } from '../game/Levels';
 import { ACHIEVEMENTS } from '../game/Achievements';
 import { loadSave, getTodayString } from '../utils/Storage';
@@ -13,6 +13,58 @@ let titlePulse = 0;
 let shopScroll = 0;
 let shopScrollMax = 0;
 let shopTab: 'skins' | 'trails' = 'skins';
+
+// Screen transition state
+export type MenuScreen = 'main' | 'settings' | 'shop' | 'level_select' | 'achievements';
+let currentMenuScreen: MenuScreen = 'main';
+let transitionFrom: MenuScreen | null = null;
+let transitionProgress = 0;
+const TRANSITION_DURATION = 0.2;
+
+// Button hover tracking
+let hoverX = -1;
+let hoverY = -1;
+
+// Purchase confirmation dialog
+let confirmDialog: { itemName: string; price: number; action: string } | null = null;
+
+export function showConfirmDialog(itemName: string, price: number, action: string): void {
+  confirmDialog = { itemName, price, action };
+}
+
+export function getConfirmDialog(): { itemName: string; price: number; action: string } | null {
+  return confirmDialog;
+}
+
+export function closeConfirmDialog(): void {
+  confirmDialog = null;
+}
+
+// Price shake animation (triggered when player can't afford item)
+let priceShakeTimer = 0;
+let priceShakeItemId = '';
+
+export function triggerPriceShake(itemId: string): void {
+  priceShakeTimer = 0.3;
+  priceShakeItemId = itemId;
+}
+
+export function updateButtonHover(mx: number, my: number): void {
+  hoverX = mx;
+  hoverY = my;
+}
+
+export function getMenuScreen(): MenuScreen {
+  return currentMenuScreen;
+}
+
+export function navigateTo(screen: MenuScreen): void {
+  if (screen === currentMenuScreen) return;
+  transitionFrom = currentMenuScreen;
+  currentMenuScreen = screen;
+  transitionProgress = 0;
+  menuAnimTime = 0; // reset for staggered animations on new screen
+}
 
 // Button rectangles for click detection
 export interface UIButton {
@@ -50,10 +102,122 @@ export function updateScreens(dt: number, state: GameState): void {
   if (state === 'menu') {
     menuAnimTime += dt;
     titlePulse += dt;
+    // Advance screen transition
+    if (transitionFrom !== null) {
+      transitionProgress += dt / TRANSITION_DURATION;
+      if (transitionProgress >= 1) {
+        transitionFrom = null;
+        transitionProgress = 0;
+      }
+    }
+    // Price shake countdown
+    if (priceShakeTimer > 0) {
+      priceShakeTimer -= dt;
+      if (priceShakeTimer <= 0) priceShakeItemId = '';
+    }
   } else if (state === 'dead') {
     deathAnimTime += dt;
   } else {
     deathAnimTime = 0;
+  }
+}
+
+/** Render the current menu screen with optional transition */
+export function renderMenuScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme, settings?: any): void {
+  const isTransitioning = transitionFrom !== null;
+
+  if (isTransitioning) {
+    const t = easeOutCubic(Math.min(1, transitionProgress));
+
+    // Render outgoing screen (fading out, sliding left)
+    ctx.save();
+    ctx.globalAlpha = 1 - t;
+    ctx.translate(-w * t * 0.15, 0);
+    renderScreen(ctx, w, h, theme, transitionFrom!, settings);
+    ctx.restore();
+
+    // Render incoming screen (fading in, sliding from right)
+    ctx.save();
+    ctx.globalAlpha = t;
+    ctx.translate(w * (1 - t) * 0.15, 0);
+    renderScreen(ctx, w, h, theme, currentMenuScreen, settings);
+    ctx.restore();
+  } else {
+    renderScreen(ctx, w, h, theme, currentMenuScreen, settings);
+  }
+
+  // Confirmation dialog overlay (renders on top of everything)
+  if (confirmDialog) {
+    renderConfirmDialog(ctx, w, h, theme);
+  }
+}
+
+function renderConfirmDialog(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme): void {
+  if (!confirmDialog) return;
+
+  // Dim background
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, w, h);
+
+  // Dialog box
+  const dlgW = 260;
+  const dlgH = 140;
+  const dlgX = w / 2 - dlgW / 2;
+  const dlgY = h / 2 - dlgH / 2;
+
+  ctx.fillStyle = 'rgba(20,20,30,0.95)';
+  ctx.strokeStyle = theme.ui.accentColor;
+  ctx.lineWidth = 2;
+  roundRect(ctx, dlgX, dlgY, dlgW, dlgH, 12);
+
+  // Title
+  ctx.font = 'bold 16px "Segoe UI", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = theme.ui.textColor;
+  ctx.fillText(`Buy ${confirmDialog.itemName}?`, w / 2, dlgY + 30);
+
+  // Price
+  ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+  ctx.fillStyle = '#ffcc00';
+  const priceStr = `${confirmDialog.price}`;
+  const priceTextW = ctx.measureText(priceStr).width;
+  ctx.fillText(priceStr, w / 2 + 8, dlgY + 58);
+  drawCoinIcon(ctx, w / 2 + 8 - priceTextW / 2 - 12, dlgY + 58, 10);
+
+  // Buttons
+  const cBtnW = 100;
+  const cBtnH = 36;
+  const gap = 16;
+
+  // Confirm button
+  const confirmX = w / 2 - cBtnW - gap / 2;
+  const confirmY = dlgY + dlgH - cBtnH - 16;
+  drawButton(ctx, confirmX, confirmY, cBtnW, cBtnH, 'Buy', theme, true);
+  buttons.push({ x: confirmX, y: confirmY, w: cBtnW, h: cBtnH, action: `confirm_${confirmDialog.action}` });
+
+  // Cancel button
+  const cancelX = w / 2 + gap / 2;
+  drawButton(ctx, cancelX, confirmY, cBtnW, cBtnH, 'Cancel', theme, false);
+  buttons.push({ x: cancelX, y: confirmY, w: cBtnW, h: cBtnH, action: 'cancel_purchase' });
+}
+
+function renderScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme, screen: MenuScreen, settings?: any): void {
+  switch (screen) {
+    case 'settings':
+      renderSettingsScreen(ctx, w, h, theme, settings ?? loadSave().settings);
+      break;
+    case 'shop':
+      renderShopScreen(ctx, w, h, theme);
+      break;
+    case 'level_select':
+      renderLevelSelectScreen(ctx, w, h, theme);
+      break;
+    case 'achievements':
+      renderAchievementsScreen(ctx, w, h, theme);
+      break;
+    default:
+      renderMainMenu(ctx, w, h, theme);
   }
 }
 
@@ -185,10 +349,11 @@ export function renderMainMenu(ctx: CanvasRenderingContext2D, w: number, h: numb
     desc: 'New challenge every day',
     accent: '#44cc44',
     info: dailyDone ? `Best: ${save.dailyBest}m` : 'Not played yet',
-    buttonLabel: 'PLAY',
-    action: 'daily',
+    buttonLabel: dailyDone ? 'COMPLETED' : 'PLAY',
+    action: dailyDone ? '' : 'daily',
     theme,
     iconType: 'daily',
+    disabled: dailyDone,
   });
   ctx.globalAlpha = 1;
 
@@ -385,15 +550,20 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
   ctx.fillText(isClassicComplete ? 'LEVEL COMPLETE!' : 'GAME OVER', w / 2, centerY);
   ctx.shadowBlur = 0;
 
-  // Distance
+  // Distance (count-up animation over 1s)
+  const countUpT = Math.min(1, deathAnimTime / 1.0);
+  const countUpEase = easeOutCubic(countUpT);
+  const displayDist = Math.floor(game.distance * countUpEase);
   ctx.font = 'bold 56px "Segoe UI", Arial, sans-serif';
   ctx.fillStyle = theme.ui.accentColor;
-  ctx.fillText(`${game.distance}m`, w / 2, centerY + 65);
+  ctx.fillText(`${displayDist}m`, w / 2, centerY + 65);
 
-  // Coins collected this run
+  // Coins collected this run (count-up slightly delayed)
+  const coinCountT = Math.min(1, Math.max(0, (deathAnimTime - 0.3)) / 0.7);
+  const displayCoins = Math.floor(game.coinsCollected * easeOutCubic(coinCountT));
   ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
   ctx.fillStyle = '#ffcc00';
-  const coinText = `+${game.coinsCollected}`;
+  const coinText = `+${displayCoins}`;
   const coinTextW = ctx.measureText(coinText).width;
   ctx.fillText(coinText, w / 2 + 10, centerY + 105);
   drawCoinIcon(ctx, w / 2 + 10 - coinTextW / 2 - 14, centerY + 105, 11);
@@ -439,6 +609,37 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
 
     drawButton(ctx, btnX, btnY + 58, btnW, btnH, 'Main Menu', theme, false);
     buttons.push({ x: btnX, y: btnY + 58, w: btnW, h: btnH, action: 'menu' });
+
+    // Rewarded ad button
+    drawButton(ctx, btnX, btnY + 116, btnW, btnH, '+50 Watch Ad', theme, false);
+    buttons.push({ x: btnX, y: btnY + 116, w: btnW, h: btnH, action: 'rewarded_ad' });
+
+    // Top runs leaderboard (compact, below buttons)
+    const save = loadSave();
+    const topRuns = save.topRuns || [];
+    if (topRuns.length > 0) {
+      const lbY = btnY + 180;
+      ctx.font = 'bold 12px "Segoe UI", Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = theme.ui.textColor + '80';
+      ctx.fillText('TOP RUNS', w / 2, lbY);
+
+      ctx.font = '11px "Segoe UI", Arial, sans-serif';
+      const showCount = Math.min(5, topRuns.length);
+      for (let i = 0; i < showCount; i++) {
+        const run = topRuns[i];
+        const runY = lbY + 16 + i * 15;
+        const isCurrent = run.distance === game.distance && deathAnimTime < 3;
+        ctx.fillStyle = isCurrent ? '#ffcc00' : theme.ui.textColor + '60';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${i + 1}.`, w / 2 - 60, runY);
+        ctx.textAlign = 'center';
+        ctx.fillText(`${run.distance}m`, w / 2, runY);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = theme.ui.textColor + '40';
+        ctx.fillText(run.mode, w / 2 + 60, runY);
+      }
+    }
   }
 
   ctx.globalAlpha = 1;
@@ -639,59 +840,80 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
       ? save.selectedSkin === item.id
       : save.selectedTrail === item.id;
 
-    // Card background
+    // Rarity
+    const rarity = getRarity(item.price);
+    const rarityColor = RARITY_COLORS[rarity];
+
+    // Card background with rarity-colored border
     if (isSelected) {
       ctx.fillStyle = theme.ui.accentColor + '30';
       ctx.strokeStyle = theme.ui.accentColor;
       ctx.lineWidth = 2;
     } else {
       ctx.fillStyle = theme.ui.textColor + '0a';
-      ctx.strokeStyle = theme.ui.textColor + '25';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = rarityColor + '60';
+      ctx.lineWidth = 1.5;
     }
     const cardW = cellW - 8;
     const cardH = cellH - 8;
     roundRect(ctx, cx - cardW / 2, cy - cardH / 2, cardW, cardH, 8);
 
-    // Preview
+    // Animated preview (gentle rotation for skins, movement for trails)
     const previewY = cy - 14;
+    ctx.save();
+    ctx.translate(cx, previewY);
+    if (shopTab === 'skins') {
+      const rot = Math.sin(menuAnimTime * 2 + i * 0.5) * 0.15;
+      ctx.rotate(rot);
+    }
     ctx.fillStyle = isSelected ? theme.ui.accentColor : theme.ui.textColor;
     if (shopTab === 'skins') {
-      drawShapePreview(ctx, cx, previewY, (item as typeof SKINS[0]).shape);
+      drawShapePreview(ctx, 0, 0, (item as typeof SKINS[0]).shape);
     } else {
-      drawTrailPreview(ctx, cx, previewY, (item as typeof TRAILS[0]).style, theme);
+      drawTrailPreview(ctx, 0, 0, (item as typeof TRAILS[0]).style, theme);
     }
+    ctx.restore();
 
     // Name
     ctx.font = 'bold 12px "Segoe UI", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = theme.ui.textColor;
-    ctx.fillText(item.name, cx, cy + 16);
+    ctx.fillText(item.name, cx, cy + 14);
+
+    // Rarity label
+    ctx.font = '9px "Segoe UI", Arial, sans-serif';
+    ctx.fillStyle = rarityColor;
+    ctx.fillText(rarity.toUpperCase(), cx, cy + 25);
 
     // Price / status
+    const statusY = cy + 36;
     if (isSelected) {
       ctx.font = 'bold 11px "Segoe UI", Arial, sans-serif';
       ctx.fillStyle = theme.ui.accentColor;
-      ctx.fillText('EQUIPPED', cx, cy + 32);
+      ctx.fillText('EQUIPPED', cx, statusY);
     } else if (isOwned) {
       ctx.font = '11px "Segoe UI", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor + '60';
-      ctx.fillText('OWNED', cx, cy + 32);
+      ctx.fillText('OWNED', cx, statusY);
     } else if (item.price === 0) {
       ctx.font = 'bold 11px "Segoe UI", Arial, sans-serif';
       ctx.fillStyle = '#44cc88';
-      ctx.fillText('FREE', cx, cy + 32);
+      ctx.fillText('FREE', cx, statusY);
     } else {
-      // Price with coin icon
+      // Price with coin icon (+ shake animation if can't afford)
+      const isShaking = priceShakeItemId === item.id && priceShakeTimer > 0;
+      const shakeOffsetX = isShaking ? Math.sin(priceShakeTimer * 40) * 4 : 0;
+      const cantAfford = save.coins < item.price;
+
       ctx.font = 'bold 13px "Segoe UI", Arial, sans-serif';
-      ctx.fillStyle = '#ffcc00';
+      ctx.fillStyle = cantAfford ? '#ff6644' : '#ffcc00';
       const priceStr = `${item.price}`;
       const priceW = ctx.measureText(priceStr).width;
-      const priceX = cx + 5;
+      const priceX = cx + 5 + shakeOffsetX;
       ctx.textAlign = 'center';
-      ctx.fillText(priceStr, priceX, cy + 32);
-      drawCoinIcon(ctx, priceX - priceW / 2 - 8, cy + 32, 8);
+      ctx.fillText(priceStr, priceX, statusY);
+      drawCoinIcon(ctx, priceX - priceW / 2 - 8, statusY, 8);
     }
 
     buttons.push({
@@ -738,9 +960,9 @@ export function renderLevelSelectScreen(ctx: CanvasRenderingContext2D, w: number
   ctx.textBaseline = 'middle';
   ctx.fillText('SELECT LEVEL', w / 2, h * 0.08);
 
-  const cols = Math.min(5, Math.floor((w - 40) / 90));
-  const cellW = 85;
-  const cellH = 85;
+  const cols = Math.min(4, Math.floor((w - 40) / 105));
+  const cellW = 100;
+  const cellH = 105;
   const gridW = cols * cellW;
   const gridX = w / 2 - gridW / 2;
   const gridY = h * 0.15;
@@ -755,31 +977,46 @@ export function renderLevelSelectScreen(ctx: CanvasRenderingContext2D, w: number
     const stars = save.levelStars[level.id] || 0;
     const unlocked = i === 0 || (save.levelStars[LEVELS[i - 1].id] || 0) > 0;
 
+    const cw = 90;
+    const ch = 95;
+
     // Cell
     ctx.fillStyle = unlocked ? theme.ui.textColor + '15' : theme.ui.textColor + '08';
     ctx.strokeStyle = unlocked ? theme.ui.accentColor + '60' : theme.ui.textColor + '20';
     ctx.lineWidth = 1;
-    roundRect(ctx, cx - 35, cy - 35, 70, 70, 8);
+    roundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 8);
 
     if (unlocked) {
       // Level number
-      ctx.font = 'bold 22px "Segoe UI", Arial, sans-serif';
+      ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor;
-      ctx.fillText(`${i + 1}`, cx, cy - 8);
+      ctx.fillText(`${i + 1}`, cx, cy - 20);
+
+      // Level name
+      ctx.font = '10px "Segoe UI", Arial, sans-serif';
+      ctx.fillStyle = theme.ui.textColor + '90';
+      ctx.fillText(level.name, cx, cy - 6);
+
+      // Target distance
+      ctx.font = '9px "Segoe UI", Arial, sans-serif';
+      ctx.fillStyle = theme.ui.accentColor + 'aa';
+      ctx.fillText(`${level.targetDistance}m`, cx, cy + 8);
 
       // Stars
       ctx.font = '14px "Segoe UI", Arial, sans-serif';
       for (let s = 0; s < 3; s++) {
         ctx.fillStyle = s < stars ? '#ffcc00' : theme.ui.textColor + '30';
-        ctx.fillText(s < stars ? '\u2605' : '\u2606', cx - 14 + s * 14, cy + 18);
+        ctx.fillText(s < stars ? '\u2605' : '\u2606', cx - 14 + s * 14, cy + 26);
       }
 
-      buttons.push({ x: cx - 35, y: cy - 35, w: 70, h: 70, action: `level_${i}` });
+      buttons.push({ x: cx - cw / 2, y: cy - ch / 2, w: cw, h: ch, action: `level_${i}` });
     } else {
       // Locked
       ctx.font = '20px "Segoe UI", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor + '30';
-      ctx.fillText('\u{1F512}', cx, cy);
+      ctx.fillText('\u{1F512}', cx, cy - 5);
+      ctx.font = '10px "Segoe UI", Arial, sans-serif';
+      ctx.fillText(level.name, cx, cy + 14);
     }
   }
 
@@ -887,7 +1124,19 @@ export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: numbe
 // ─── DRAWING HELPERS ─────────────────────────────────────
 
 function drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, label: string, theme: GameTheme, primary: boolean): void {
-  ctx.fillStyle = primary ? theme.ui.accentColor + '40' : theme.ui.textColor + '15';
+  const isHovered = hoverX >= x && hoverX <= x + w && hoverY >= y && hoverY <= y + h;
+
+  if (isHovered) {
+    ctx.save();
+    const cx = x + w / 2, cy = y + h / 2;
+    ctx.translate(cx, cy);
+    ctx.scale(1.04, 1.04);
+    ctx.translate(-cx, -cy);
+  }
+
+  ctx.fillStyle = primary
+    ? theme.ui.accentColor + (isHovered ? '60' : '40')
+    : theme.ui.textColor + (isHovered ? '25' : '15');
   ctx.strokeStyle = primary ? theme.ui.accentColor : theme.ui.textColor + '60';
   ctx.lineWidth = 2;
   roundRect(ctx, x, y, w, h, 8);
@@ -897,6 +1146,8 @@ function drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, w: numb
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, x + w / 2, y + h / 2);
+
+  if (isHovered) ctx.restore();
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

@@ -55,7 +55,7 @@ describe('HUD rendering', () => {
   it('should not render when state is not playing', () => {
     const game = makeGame({ state: 'menu' });
     const mock = createMockCtx();
-    renderHUD(mock.ctx, game, theme);
+    renderHUD(mock.ctx, game, theme, 0.016);
     // No draw calls should be made (early return)
     expect(mock.calls.length).toBe(0);
   });
@@ -64,13 +64,13 @@ describe('HUD rendering', () => {
     const game = makeGame({
       themeManager: { isTransitioning: true, progress: 0.5 },
     });
-    renderHUD(ctx, game, theme);
+    renderHUD(ctx, game, theme, 0.016);
     expect(state.globalAlpha).toBe(1);
   });
 
   it('should reset shadowBlur to 0 after rendering', () => {
     const game = makeGame();
-    renderHUD(ctx, game, theme);
+    renderHUD(ctx, game, theme, 0.016);
     expect(state.shadowBlur).toBe(0);
   });
 
@@ -83,7 +83,7 @@ describe('HUD rendering', () => {
       classicTargetDistance: 100,
     });
     // Should not throw
-    renderHUD(ctx, game, theme);
+    renderHUD(ctx, game, theme, 0.016);
     // Verify no NaN was produced — check that fillRect was called with valid numbers
     // (the speed bar fillRect should have width 0, not NaN)
   });
@@ -95,7 +95,7 @@ describe('HUD rendering', () => {
       classicTargetDistance: 100,
     });
     const mock = createMockCtx();
-    renderHUD(mock.ctx, game, theme);
+    renderHUD(mock.ctx, game, theme, 0.016);
     const fillTextCalls = mock.calls.filter(c => c.method === 'fillText');
     const distanceCall = fillTextCalls.find(c => c.args[0]?.includes('/'));
     expect(distanceCall).toBeDefined();
@@ -105,7 +105,7 @@ describe('HUD rendering', () => {
   it('should display endless mode distance without target', () => {
     const game = makeGame({ distance: 42 });
     const mock = createMockCtx();
-    renderHUD(mock.ctx, game, theme);
+    renderHUD(mock.ctx, game, theme, 0.016);
     const fillTextCalls = mock.calls.filter(c => c.method === 'fillText');
     const distanceCall = fillTextCalls.find(c => c.args[0] === '42m');
     expect(distanceCall).toBeDefined();
@@ -114,7 +114,7 @@ describe('HUD rendering', () => {
   it('should show SHIP mode indicator when physicsMode is ship', () => {
     const game = makeGame({ player: { physicsMode: 'ship' } });
     const mock = createMockCtx();
-    renderHUD(mock.ctx, game, theme);
+    renderHUD(mock.ctx, game, theme, 0.016);
     const textCalls = mock.calls.filter(c => c.method === 'fillText');
     const modeCall = textCalls.find(c => c.args[0] === 'SHIP');
     expect(modeCall).toBeDefined();
@@ -123,35 +123,25 @@ describe('HUD rendering', () => {
   it('should show WAVE mode indicator when physicsMode is wave', () => {
     const game = makeGame({ player: { physicsMode: 'wave' } });
     const mock = createMockCtx();
-    renderHUD(mock.ctx, game, theme);
+    renderHUD(mock.ctx, game, theme, 0.016);
     const textCalls = mock.calls.filter(c => c.method === 'fillText');
     const modeCall = textCalls.find(c => c.args[0] === 'WAVE');
     expect(modeCall).toBeDefined();
   });
 
-  it('mode indicator and speed bar should not overlap vertically', () => {
-    const game = makeGame();
-    const mock = createMockCtx();
-    renderHUD(mock.ctx, game, theme);
-
-    // Find mode text position (fillText with 'SHIP' or 'WAVE')
-    const textCalls = mock.calls.filter(c => c.method === 'fillText');
-    const modeCall = textCalls.find(c => c.args[0] === 'SHIP' || c.args[0] === 'WAVE');
-
-    // Find speed bar position (fillRect calls near bottom of screen)
-    const rectCalls = mock.calls.filter(c => c.method === 'fillRect');
-    const speedBarCalls = rectCalls.filter(c => {
-      const y = c.args[1];
-      return y > game.height - 20 && y < game.height;
+  it('speed lines should not render when speedPct is below threshold', () => {
+    // Speed bar replaced by speed lines that only appear above 30% speedPct
+    const game = makeGame({
+      scrollSpeed: 200,
+      baseScrollSpeed: 200,
+      maxScrollSpeed: 500,
     });
+    const mock = createMockCtx();
+    renderHUD(mock.ctx, game, theme, 0.016);
 
-    expect(modeCall).toBeDefined();
-    expect(speedBarCalls.length).toBeGreaterThan(0);
-
-    const modeTextY = modeCall!.args[2]; // y position of mode text
-    const barY = speedBarCalls[0].args[1]; // y position of speed bar
-
-    // Mode text should be well above speed bar (at least 20px)
-    expect(barY - modeTextY).toBeGreaterThanOrEqual(20);
+    // At 0% speedPct, no stroke calls for speed lines (only mode icon uses stroke)
+    const strokeCalls = mock.calls.filter(c => c.method === 'stroke');
+    // Mode icon draws one stroke — speed lines would add more
+    expect(strokeCalls.length).toBe(1); // only the mode icon stroke
   });
 });

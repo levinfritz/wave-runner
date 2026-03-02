@@ -1,8 +1,69 @@
 import type { Game } from '../game/Game';
 import type { GameTheme } from '../themes/themes';
 
-export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: GameTheme): void {
+// ─── Floating Text System ──────────────────────────────
+
+interface FloatingText {
+  text: string;
+  x: number;
+  y: number;
+  color: string;
+  life: number;
+  maxLife: number;
+}
+
+const floatingTexts: FloatingText[] = [];
+
+export function addFloatingText(text: string, screenX: number, screenY: number, color: string): void {
+  floatingTexts.push({ text, x: screenX, y: screenY, color, life: 0.8, maxLife: 0.8 });
+}
+
+// ─── Toast System ──────────────────────────────────────
+
+interface Toast {
+  title: string;
+  subtitle: string;
+  timer: number;
+}
+
+const toastQueue: Toast[] = [];
+let activeToast: Toast | null = null;
+const TOAST_DURATION = 3;
+const TOAST_SLIDE_TIME = 0.3;
+
+export function showToast(title: string, subtitle = ''): void {
+  toastQueue.push({ title, subtitle, timer: TOAST_DURATION });
+}
+
+// ─── Speed Lines State ─────────────────────────────────
+
+let speedLinePhase = 0;
+
+// ─── Render ────────────────────────────────────────────
+
+export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: GameTheme, dt: number): void {
   if (game.state !== 'playing') return;
+
+  // Update floating texts
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.life -= dt;
+    ft.y -= 40 * dt; // drift upward
+    if (ft.life <= 0) {
+      floatingTexts.splice(i, 1);
+    }
+  }
+
+  // Update toast queue
+  if (activeToast) {
+    activeToast.timer -= dt;
+    if (activeToast.timer <= 0) {
+      activeToast = null;
+    }
+  }
+  if (!activeToast && toastQueue.length > 0) {
+    activeToast = toastQueue.shift()!;
+  }
 
   // Tutorial hints — only during the very first game
   if (game.showTutorial && game.distance < 30) {
@@ -60,6 +121,25 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   }
   ctx.shadowBlur = 0;
 
+  // Classic mode progress bar
+  if (game.mode === 'classic' && game.classicTargetDistance > 0) {
+    const barW = 200;
+    const barH = 4;
+    const barX = w / 2 - barW / 2;
+    const barY = 54;
+    const progress = Math.min(1, game.distance / game.classicTargetDistance);
+
+    ctx.fillStyle = theme.ui.textColor + '25';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = theme.ui.accentColor;
+    ctx.fillRect(barX, barY, barW * progress, barH);
+
+    // Bar end markers
+    ctx.fillStyle = theme.ui.textColor + '40';
+    ctx.fillRect(barX, barY - 1, 1, barH + 2);
+    ctx.fillRect(barX + barW, barY - 1, 1, barH + 2);
+  }
+
   // Coins - top right
   ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
   ctx.textAlign = 'right';
@@ -76,21 +156,46 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   // Highscore - below coins
   ctx.font = '14px "Segoe UI", Arial, sans-serif';
   ctx.fillStyle = theme.ui.accentColor;
+  ctx.textAlign = 'right';
   ctx.fillText(`Best: ${game.highScore}m`, w - 20, 44);
 
-  // Speed indicator - small bar bottom center
+  // Speed lines at screen edges (replacing small speed bar)
   const speedRange = game.maxScrollSpeed - game.baseScrollSpeed;
   const speedPct = speedRange > 0 ? (game.scrollSpeed - game.baseScrollSpeed) / speedRange : 0;
-  const barW = 100;
-  const barH = 3;
-  const barX = w / 2 - barW / 2;
-  const barY = h - 12;
-  ctx.fillStyle = theme.ui.textColor + '40';
-  ctx.fillRect(barX, barY, barW, barH);
-  ctx.fillStyle = theme.ui.accentColor;
-  ctx.fillRect(barX, barY, barW * speedPct, barH);
 
-  // Physics mode indicator - bottom left (above speed bar)
+  if (speedPct > 0.3) {
+    speedLinePhase += dt * (2 + speedPct * 6);
+    const intensity = (speedPct - 0.3) / 0.7; // 0→1 as speedPct goes 0.3→1.0
+    const lineCount = Math.floor(3 + intensity * 6);
+    const lineAlpha = 0.1 + intensity * 0.2;
+
+    ctx.save();
+    ctx.strokeStyle = theme.ui.accentColor;
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = lineAlpha;
+
+    for (let i = 0; i < lineCount; i++) {
+      const t = ((speedLinePhase + i * 1.7) % 3) / 3; // 0→1 cycling
+      const lineLen = 20 + intensity * 40;
+
+      // Left edge lines
+      const ly = t * h;
+      ctx.beginPath();
+      ctx.moveTo(0, ly);
+      ctx.lineTo(lineLen, ly);
+      ctx.stroke();
+
+      // Right edge lines
+      const ry = ((t + 0.5) % 1) * h;
+      ctx.beginPath();
+      ctx.moveTo(w, ry);
+      ctx.lineTo(w - lineLen, ry);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Physics mode indicator - bottom left
   const mode = game.player.physicsMode;
   const modeColor = mode === 'wave' ? '#aa44ff' : '#4488ff';
   ctx.font = 'bold 12px "Segoe UI", Arial, sans-serif';
@@ -124,7 +229,81 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
     ctx.font = '14px "Segoe UI", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = theme.ui.textColor;
-    ctx.fillText(theme.name, w / 2, 55);
+    ctx.fillText(theme.name, w / 2, 55 + (game.mode === 'classic' ? 12 : 0));
     ctx.globalAlpha = 1;
+  }
+
+  // Render floating texts
+  for (const ft of floatingTexts) {
+    const alpha = ft.life / ft.maxLife;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = 'bold 16px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = ft.color;
+    ctx.shadowColor = ft.color;
+    ctx.shadowBlur = 6;
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.restore();
+  }
+
+  // Render toast notification
+  if (activeToast) {
+    const t = activeToast.timer;
+    const total = TOAST_DURATION;
+    // Slide in during first TOAST_SLIDE_TIME, slide out during last TOAST_SLIDE_TIME
+    let slideY = 0;
+    if (t > total - TOAST_SLIDE_TIME) {
+      // Sliding in
+      const progress = (total - t) / TOAST_SLIDE_TIME;
+      slideY = -60 * (1 - progress);
+    } else if (t < TOAST_SLIDE_TIME) {
+      // Sliding out
+      const progress = t / TOAST_SLIDE_TIME;
+      slideY = -60 * (1 - progress);
+    }
+
+    const toastW = 280;
+    const toastH = activeToast.subtitle ? 52 : 36;
+    const toastX = w / 2 - toastW / 2;
+    const toastY = 8 + slideY;
+
+    ctx.save();
+    // Background
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(toastX + 6, toastY);
+    ctx.lineTo(toastX + toastW - 6, toastY);
+    ctx.quadraticCurveTo(toastX + toastW, toastY, toastX + toastW, toastY + 6);
+    ctx.lineTo(toastX + toastW, toastY + toastH - 6);
+    ctx.quadraticCurveTo(toastX + toastW, toastY + toastH, toastX + toastW - 6, toastY + toastH);
+    ctx.lineTo(toastX + 6, toastY + toastH);
+    ctx.quadraticCurveTo(toastX, toastY + toastH, toastX, toastY + toastH - 6);
+    ctx.lineTo(toastX, toastY + 6);
+    ctx.quadraticCurveTo(toastX, toastY, toastX + 6, toastY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Title
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 14px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#ffcc00';
+    ctx.shadowBlur = 4;
+    ctx.fillText(activeToast.title, w / 2, toastY + (activeToast.subtitle ? 16 : toastH / 2));
+    ctx.shadowBlur = 0;
+
+    // Subtitle
+    if (activeToast.subtitle) {
+      ctx.fillStyle = '#ffffffcc';
+      ctx.font = '12px "Segoe UI", Arial, sans-serif';
+      ctx.fillText(activeToast.subtitle, w / 2, toastY + 36);
+    }
+    ctx.restore();
   }
 }

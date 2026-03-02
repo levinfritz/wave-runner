@@ -23,6 +23,10 @@ export interface SaveData {
   dailyDate: string; // "YYYY-MM-DD"
   dailyBest: number; // best distance on today's daily
   gamesPlayed: number;
+  // Progression
+  lastLoginDate: string; // "YYYY-MM-DD"
+  loginStreak: number;
+  topRuns: { distance: number; date: string; mode: string }[];
 }
 
 const defaultSave: SaveData = {
@@ -47,6 +51,9 @@ const defaultSave: SaveData = {
   dailyDate: '',
   dailyBest: 0,
   gamesPlayed: 0,
+  lastLoginDate: '',
+  loginStreak: 0,
+  topRuns: [],
 };
 
 let cachedData: SaveData | null = null;

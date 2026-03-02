@@ -36,6 +36,10 @@ export class Corridor {
     this.noise2 = new SimplexNoise1D(Date.now() + 12345);
   }
 
+  setBaseGap(gap: number): void {
+    this.baseGap = gap;
+  }
+
   generate(fromX: number, toX: number, difficulty: number): void {
     const startX = Math.max(fromX, this.generatedUpTo);
     if (startX >= toX) return;

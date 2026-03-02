@@ -1,3 +1,19 @@
+export type SkinRarity = 'common' | 'rare' | 'epic' | 'legendary';
+
+export const RARITY_COLORS: Record<SkinRarity, string> = {
+  common: '#aaaaaa',
+  rare: '#4488ff',
+  epic: '#aa44ff',
+  legendary: '#ffaa00',
+};
+
+export function getRarity(price: number): SkinRarity {
+  if (price >= 4000) return 'legendary';
+  if (price >= 2000) return 'epic';
+  if (price >= 800) return 'rare';
+  return 'common';
+}
+
 export interface SkinDef {
   id: string;
   name: string;

@@ -672,6 +672,7 @@ export class LevelGenerator {
   private difficulty = 0;
   private fixedDifficulty = -1; // -1 = use distance-based scaling
   private currentMode: 'ship' | 'wave' = 'ship';
+  private noPortals = false;
 
   obstacles: Obstacle[] = [];
   coins: Coin[] = [];
@@ -687,6 +688,7 @@ export class LevelGenerator {
     this.difficulty = 0;
     this.fixedDifficulty = -1;
     this.currentMode = 'ship';
+    this.noPortals = false;
     this.obstacles = [];
     this.coins = [];
   }
@@ -694,6 +696,14 @@ export class LevelGenerator {
   setFixedDifficulty(d: number): void {
     this.fixedDifficulty = d;
     this.difficulty = d;
+  }
+
+  setNoPortals(val: boolean): void {
+    this.noPortals = val;
+  }
+
+  setStartMode(mode: 'ship' | 'wave'): void {
+    this.currentMode = mode;
   }
 
   generate(playerX: number, getWalls: (x: number) => { topY: number; bottomY: number } | null): void {
@@ -734,8 +744,8 @@ export class LevelGenerator {
       this.nextObstacleX += spacing + randomRange(-20, 40);
     }
 
-    // Generate portals (mode switching) — start at difficulty 2+
-    while (this.difficulty >= 2 && this.nextPortalX <= generateAhead) {
+    // Generate portals (mode switching) — start at difficulty 2+, skip if noPortals
+    while (!this.noPortals && this.difficulty >= 2 && this.nextPortalX <= generateAhead) {
       // Ensure portals don't overlap with existing obstacles (push portal forward if needed)
       let portalX = this.nextPortalX;
       for (let i = this.obstacles.length - 1; i >= 0 && i >= this.obstacles.length - 30; i--) {

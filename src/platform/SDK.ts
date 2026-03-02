@@ -1,6 +1,7 @@
 /**
  * Platform SDK abstraction.
- * Detects CrazyGames or Poki SDK, falls back to no-op.
+ * Lazy-initialized: call initPlatform() after page load, use getPlatform() everywhere.
+ * Supports CrazyGames SDK v3 and Poki SDK.
  */
 
 export interface PlatformSDK {
@@ -11,19 +12,18 @@ export interface PlatformSDK {
   showAd(type: 'midgame' | 'rewarded'): Promise<boolean>;
 }
 
-// ─── CrazyGames SDK ─────────────────────────────────────
+// ─── CrazyGames SDK v3 ─────────────────────────────────
 
 class CrazyGamesSDK implements PlatformSDK {
   private sdk: any = null;
 
   async init(): Promise<void> {
     try {
-      // CrazyGames injects window.CrazyGames
       const cg = (window as any).CrazyGames;
-      if (cg?.CrazySDK) {
-        this.sdk = new cg.CrazySDK();
+      if (cg?.SDK) {
+        this.sdk = cg.SDK;
         await this.sdk.init();
-        console.log('[SDK] CrazyGames initialized');
+        console.log('[SDK] CrazyGames v3 initialized');
       }
     } catch (e) {
       console.warn('[SDK] CrazyGames init failed:', e);
@@ -39,34 +39,42 @@ class CrazyGamesSDK implements PlatformSDK {
   }
 
   happyTime(): void {
-    this.sdk?.game?.happytime();
+    this.sdk?.game?.happyTime();
   }
 
   async showAd(type: 'midgame' | 'rewarded'): Promise<boolean> {
     if (!this.sdk?.ad) return false;
+    // Bracket ads with gameplay lifecycle
+    this.gameplayStop();
     try {
-      if (type === 'midgame') {
-        await this.sdk.ad.requestAd('midgame');
-      } else {
-        await this.sdk.ad.requestAd('rewarded');
-      }
-      return true;
+      return await new Promise<boolean>((resolve) => {
+        const callbacks = {
+          adStarted: () => {},
+          adFinished: () => resolve(true),
+          adError: () => resolve(false),
+        };
+        this.sdk.ad.requestAd(type === 'rewarded' ? 'rewarded' : 'midgame', callbacks);
+      });
     } catch {
       return false;
+    } finally {
+      this.gameplayStart();
     }
   }
 }
 
 // ─── Poki SDK ────────────────────────────────────────────
 
-class PokiSDK implements PlatformSDK {
+class PokiSDKImpl implements PlatformSDK {
   private sdk: any = null;
 
   async init(): Promise<void> {
     try {
       const poki = (window as any).PokiSDK;
       if (poki) {
+        poki.gameLoadingStart?.();
         await poki.init();
+        poki.gameLoadingFinished?.();
         this.sdk = poki;
         console.log('[SDK] Poki initialized');
       }
@@ -89,6 +97,8 @@ class PokiSDK implements PlatformSDK {
 
   async showAd(type: 'midgame' | 'rewarded'): Promise<boolean> {
     if (!this.sdk) return false;
+    // Bracket ads with gameplay lifecycle
+    this.gameplayStop();
     try {
       if (type === 'rewarded') {
         await this.sdk.rewardedBreak();
@@ -98,6 +108,8 @@ class PokiSDK implements PlatformSDK {
       return true;
     } catch {
       return false;
+    } finally {
+      this.gameplayStart();
     }
   }
 }
@@ -114,12 +126,24 @@ class NoopSDK implements PlatformSDK {
   async showAd(): Promise<boolean> { return false; }
 }
 
-// ─── Auto-detect ─────────────────────────────────────────
+// ─── Lazy initialization ────────────────────────────────
 
-function detectPlatform(): PlatformSDK {
-  if ((window as any).CrazyGames) return new CrazyGamesSDK();
-  if ((window as any).PokiSDK) return new PokiSDK();
-  return new NoopSDK();
+let _platform: PlatformSDK | null = null;
+
+export function getPlatform(): PlatformSDK {
+  if (!_platform) _platform = new NoopSDK();
+  return _platform;
 }
 
-export const platform: PlatformSDK = detectPlatform();
+export async function initPlatform(): Promise<PlatformSDK> {
+  const cg = (window as any).CrazyGames;
+  if (cg?.SDK) {
+    _platform = new CrazyGamesSDK();
+  } else if ((window as any).PokiSDK) {
+    _platform = new PokiSDKImpl();
+  } else {
+    _platform = new NoopSDK();
+  }
+  await _platform.init();
+  return _platform;
+}

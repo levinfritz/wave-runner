@@ -1,4 +1,5 @@
 import type { ParticleStyle } from '../themes/themes';
+import { ObjectPool } from '../utils/ObjectPool';
 
 interface Particle {
   x: number;
@@ -15,7 +16,12 @@ interface Particle {
 export class ParticleSystem {
   private particles: Particle[] = [];
   private spawnTimer = 0;
-  private maxParticles = 100;
+  private maxParticles = 150;
+  private pool = new ObjectPool<Particle>(
+    () => ({ x: 0, y: 0, vx: 0, vy: 0, life: 0, maxLife: 0, size: 0, color: '', style: 'sparks' as ParticleStyle }),
+    () => {}, // no reset needed, we overwrite all fields
+    50
+  );
 
   update(dt: number): void {
     let i = 0;
@@ -49,7 +55,8 @@ export class ParticleSystem {
       }
 
       if (p.life <= 0) {
-        // Swap with last and pop — O(1) instead of O(n)
+        // Return to pool and swap-pop
+        this.pool.release(p);
         this.particles[i] = this.particles[this.particles.length - 1];
         this.particles.pop();
       } else {
@@ -85,17 +92,16 @@ export class ParticleSystem {
     color: string,
     style: ParticleStyle
   ): Particle {
-    const base: Particle = {
-      x: cameraX + Math.random() * canvasWidth,
-      y: cameraY + Math.random() * canvasHeight,
-      vx: 0,
-      vy: 0,
-      life: 2 + Math.random() * 2,
-      maxLife: 4,
-      size: 2 + Math.random() * 3,
-      color,
-      style,
-    };
+    const base = this.pool.get();
+    base.x = cameraX + Math.random() * canvasWidth;
+    base.y = cameraY + Math.random() * canvasHeight;
+    base.vx = 0;
+    base.vy = 0;
+    base.life = 2 + Math.random() * 2;
+    base.maxLife = 4;
+    base.size = 2 + Math.random() * 3;
+    base.color = color;
+    base.style = style;
 
     switch (style) {
       case 'sparks':
@@ -215,18 +221,34 @@ export class ParticleSystem {
     for (let i = 0; i < count; i++) {
       const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
       const speed = 60 + Math.random() * 80;
-      this.particles.push({
-        x: worldX,
-        y: worldY,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: 0.3 + Math.random() * 0.3,
-        maxLife: 0.6,
-        size: 2 + Math.random() * 2,
-        color,
-        style: 'sparks',
-      });
+      const p = this.pool.get();
+      p.x = worldX;
+      p.y = worldY;
+      p.vx = Math.cos(angle) * speed;
+      p.vy = Math.sin(angle) * speed;
+      p.life = 0.3 + Math.random() * 0.3;
+      p.maxLife = 0.6;
+      p.size = 2 + Math.random() * 2;
+      p.color = color;
+      p.style = 'sparks';
+      this.particles.push(p);
     }
+  }
+
+  /** Emit a single thrust particle behind the player */
+  emitThrust(worldX: number, worldY: number, color: string): void {
+    if (this.particles.length >= this.maxParticles) return;
+    const p = this.pool.get();
+    p.x = worldX;
+    p.y = worldY + (Math.random() - 0.5) * 6;
+    p.vx = -(40 + Math.random() * 60);
+    p.vy = (Math.random() - 0.5) * 30;
+    p.life = 0.15 + Math.random() * 0.15;
+    p.maxLife = 0.3;
+    p.size = 1.5 + Math.random() * 1.5;
+    p.color = color;
+    p.style = 'sparks';
+    this.particles.push(p);
   }
 
   clear(): void {

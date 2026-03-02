@@ -15,7 +15,11 @@ export class Player {
   width = 24;
   height = 24;
   alive = true;
+  // Trail ring buffer (avoids splice GC pressure)
   trail: TrailPoint[] = [];
+  private trailBuffer: TrailPoint[] = [];
+  private trailHead = 0;
+  trailLength = 0;
   private maxTrailLength = 50;
   private trailTimer = 0;
   private trailInterval = 0.016;
@@ -29,7 +33,9 @@ export class Player {
 
   // Visual
   rotation = 0;
-  deathParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
+  scaleX = 1.0;
+  scaleY = 1.0;
+  deathParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string; size: number; square: boolean }[] = [];
 
   // Skin & trail
   skinType: string = 'default';
@@ -41,6 +47,15 @@ export class Player {
     this.vy = 0;
     this.alive = true;
     this.trail = [];
+    this.trailHead = 0;
+    this.trailLength = 0;
+    // Pre-allocate ring buffer
+    if (this.trailBuffer.length !== this.maxTrailLength) {
+      this.trailBuffer = [];
+      for (let i = 0; i < this.maxTrailLength; i++) {
+        this.trailBuffer.push({ x: 0, y: 0, age: 0 });
+      }
+    }
     this.rotation = 0;
     this.wasHolding = false;
     this.deathParticles = [];
@@ -72,17 +87,32 @@ export class Player {
 
     this.x += scrollSpeed * dt;
 
-    // Trail
+    // Squash & stretch based on vertical velocity
+    const velocityFactor = Math.abs(this.vy) / this.maxVelocity;
+    const stretch = 1 + velocityFactor * 0.15;
+    this.scaleY = Math.min(1.15, stretch);
+    this.scaleX = Math.max(0.85, 1 / stretch);
+
+    // Trail (ring buffer — no allocations)
     this.trailTimer += dt;
     if (this.trailTimer >= this.trailInterval) {
       this.trailTimer = 0;
-      this.trail.push({ x: this.x, y: this.y, age: 0 });
-      if (this.trail.length > this.maxTrailLength) {
-        this.trail.splice(0, this.trail.length - this.maxTrailLength);
-      }
+      const pt = this.trailBuffer[this.trailHead];
+      pt.x = this.x;
+      pt.y = this.y;
+      pt.age = 0;
+      this.trailHead = (this.trailHead + 1) % this.maxTrailLength;
+      if (this.trailLength < this.maxTrailLength) this.trailLength++;
     }
-    for (const point of this.trail) {
-      point.age += dt;
+    for (let i = 0; i < this.trailLength; i++) {
+      const idx = (this.trailHead - this.trailLength + i + this.maxTrailLength) % this.maxTrailLength;
+      this.trailBuffer[idx].age += dt;
+    }
+    // Expose as ordered array for rendering (oldest to newest)
+    this.trail.length = this.trailLength;
+    for (let i = 0; i < this.trailLength; i++) {
+      const idx = (this.trailHead - this.trailLength + i + this.maxTrailLength) % this.maxTrailLength;
+      this.trail[i] = this.trailBuffer[idx];
     }
   }
 
@@ -129,7 +159,7 @@ export class Player {
     if (!this.alive) return;
     this.alive = false;
 
-    // Spawn death particles
+    // Spawn death particles with variety
     const colors = [theme.player.color, theme.player.trailColor, theme.obstacles.primaryColor];
     for (let i = 0; i < 24; i++) {
       const angle = (Math.PI * 2 * i) / 24 + Math.random() * 0.3;
@@ -141,6 +171,8 @@ export class Player {
         vy: Math.sin(angle) * speed,
         life: 0.5 + Math.random() * 0.5,
         color: colors[Math.floor(Math.random() * colors.length)],
+        size: 2 + Math.random() * 5,
+        square: Math.random() > 0.5,
       });
     }
   }
@@ -156,9 +188,13 @@ export class Player {
         const sy = p.y - cameraY;
         ctx.globalAlpha = p.life;
         ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-        ctx.fill();
+        if (p.square) {
+          ctx.fillRect(sx - p.size / 2, sy - p.size / 2, p.size, p.size);
+        } else {
+          ctx.beginPath();
+          ctx.arc(sx, sy, p.size / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       ctx.globalAlpha = 1;
       return;
@@ -170,7 +206,7 @@ export class Player {
     ctx.save();
     ctx.translate(sx, sy);
     ctx.rotate(this.rotation);
-    ctx.scale(1.5, 1.5); // Bold scale — bigger player like Space Waves
+    ctx.scale(1.5 * this.scaleX, 1.5 * this.scaleY); // Squash & stretch
 
     // Glow effect
     if (theme.player.trailGlow) {
