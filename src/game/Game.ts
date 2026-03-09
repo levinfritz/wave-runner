@@ -14,7 +14,7 @@ import { addFloatingText } from '../ui/HUD';
 import { loadSave, updateSave, getTodayString, getDailySeed } from '../utils/Storage';
 
 export type GameState = 'menu' | 'playing' | 'dead' | 'paused';
-export type GameMode = 'endless' | 'classic' | 'race';
+export type GameMode = 'endless' | 'classic';
 
 const CONTROL_KEYS = new Set(['Space', 'ArrowUp', 'KeyW']);
 
@@ -70,8 +70,14 @@ export class Game {
   countdownTimer = 0;
   private countdownPhase = 0; // 3, 2, 1, 0 (go)
 
-  // Near-miss system
+  // Near-miss combo system
   private nearMissCooldown = 0;
+  nearMissCombo = 0;
+  nearMissComboTimer = 0;
+  bestCombo = 0;
+  private readonly COMBO_WINDOW = 2.0;
+  private readonly COMBO_MILESTONES = [5, 10, 20];
+  private readonly COMBO_BONUS_COINS = [5, 15, 50];
 
   // Milestone celebrations
   private lastMilestone = 0;
@@ -178,6 +184,7 @@ export class Game {
 
     // Resize
     window.addEventListener('resize', () => this.resize());
+    document.addEventListener('fullscreenchange', () => this.resize());
 
     // Visibility - pause on tab switch
     document.addEventListener('visibilitychange', () => {
@@ -227,6 +234,9 @@ export class Game {
     this.countdownTimer = 2.99; // 3-2-1 countdown (renders "3" at 2.99, "2" at 1.99, etc.)
     this.countdownPhase = 3;
     this.nearMissCooldown = 0;
+    this.nearMissCombo = 0;
+    this.nearMissComboTimer = 0;
+    this.bestCombo = 0;
     this.lastMilestone = 0;
     this.milestoneFlashTimer = 0;
 
@@ -488,15 +498,55 @@ export class Game {
         }
       }
 
-      // Near-miss detection
+      // Near-miss combo system
+      if (this.nearMissComboTimer > 0) {
+        this.nearMissComboTimer -= dt;
+        if (this.nearMissComboTimer <= 0) {
+          this.nearMissCombo = 0;
+        }
+      }
       if (this.nearMissCooldown > 0) {
         this.nearMissCooldown -= dt;
       } else if (this.graceTimer <= 0 && this.deathSlowMoTimer <= 0 && this.player.alive) {
         const nearMiss = checkNearMiss(this.player, this.corridor, this.levelGen.obstacles, this.height);
         if (nearMiss) {
+          this.nearMissCombo++;
+          this.nearMissComboTimer = this.COMBO_WINDOW;
+          if (this.nearMissCombo > this.bestCombo) {
+            this.bestCombo = this.nearMissCombo;
+          }
           this.audio.playSFX('nearmiss');
-          this.particles.burst(nearMiss.x, nearMiss.y, '#ffffff', 6);
           this.nearMissCooldown = 0.3;
+
+          // Check combo milestones (5/10/20)
+          let isMilestone = false;
+          for (let i = this.COMBO_MILESTONES.length - 1; i >= 0; i--) {
+            if (this.nearMissCombo === this.COMBO_MILESTONES[i]) {
+              isMilestone = true;
+              const bonus = this.COMBO_BONUS_COINS[i];
+              this.coinsCollected += bonus;
+              this.particles.burst(this.player.x, this.player.y, '#ffcc00', 24);
+              this.audio.playSFX('speed_milestone');
+              if (settings.screenShake) {
+                this.camera.shake(10);
+              }
+              const screenX = this.player.x - this.camera.renderX;
+              const screenY = this.player.y - this.camera.renderY;
+              addFloatingText(`+${bonus} COMBO!`, screenX, screenY - 20, '#ffcc00', 'combo');
+              break;
+            }
+          }
+
+          if (!isMilestone) {
+            this.particles.burst(nearMiss.x, nearMiss.y, '#ffffff', 6);
+          }
+
+          // Floating combo text at 2+
+          if (this.nearMissCombo >= 2 && !isMilestone) {
+            const screenX = this.player.x - this.camera.renderX;
+            const screenY = this.player.y - this.camera.renderY;
+            addFloatingText(`x${this.nearMissCombo} CLOSE!`, screenX, screenY - 20, '#ffffff', 'combo');
+          }
         }
       }
 
@@ -576,6 +626,7 @@ export class Game {
       coins: save.coins + this.coinsCollected,
       totalCoinsEarned: save.totalCoinsEarned + this.coinsCollected,
       totalDeaths: save.totalDeaths + 1,
+      bestCombo: Math.max(save.bestCombo, this.bestCombo),
     };
 
     // Daily challenge best

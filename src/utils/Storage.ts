@@ -27,6 +27,7 @@ export interface SaveData {
   lastLoginDate: string; // "YYYY-MM-DD"
   loginStreak: number;
   topRuns: { distance: number; date: string; mode: string }[];
+  bestCombo: number;
 }
 
 const defaultSave: SaveData = {
@@ -54,6 +55,7 @@ const defaultSave: SaveData = {
   lastLoginDate: '',
   loginStreak: 0,
   topRuns: [],
+  bestCombo: 0,
 };
 
 let cachedData: SaveData | null = null;

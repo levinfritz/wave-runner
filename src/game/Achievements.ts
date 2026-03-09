@@ -48,6 +48,11 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   // Total distance
   { id: 'total_5000', name: 'Explorer', desc: 'Fly 5000m total', icon: '\u2192', check: () => loadSave().totalDistance >= 5000 },
   { id: 'total_50000', name: 'Voyager', desc: 'Fly 50000m total', icon: '\u2192', check: () => loadSave().totalDistance >= 50000 },
+
+  // Near-miss combos
+  { id: 'combo_5', name: 'Daredevil', desc: '5x near-miss combo', icon: '\u26A1', check: () => loadSave().bestCombo >= 5 },
+  { id: 'combo_10', name: 'Adrenaline Junkie', desc: '10x near-miss combo', icon: '\u26A1', check: () => loadSave().bestCombo >= 10 },
+  { id: 'combo_20', name: 'Death Defier', desc: '20x near-miss combo', icon: '\u26A1', check: () => loadSave().bestCombo >= 20 },
 ];
 
 /** Check all achievements and unlock newly completed ones. Returns newly unlocked IDs. */

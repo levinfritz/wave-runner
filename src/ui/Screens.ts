@@ -6,6 +6,32 @@ import { ACHIEVEMENTS } from '../game/Achievements';
 import { loadSave, getTodayString } from '../utils/Storage';
 import { easeOutCubic } from '../utils/Math';
 
+// ─── Motivational Messages ────────────────────────────
+const MOTIV_POOL = ["Nice try!", "One more run!", "You can do it!", "Almost there!", "Keep going!"];
+
+function getMotivationalMessage(game: Game): string | null {
+  // Don't show on highscore or level complete
+  if (game.isNewHighScore || game.classicComplete) return null;
+
+  const save = loadSave();
+
+  if (save.gamesPlayed <= 1) return "Great start! Keep practicing!";
+  if (game.distance < 20) return "Don't give up!";
+  if (game.highScore > 0 && game.distance >= game.highScore * 0.9) return "So close! Almost a new record!";
+  if (game.distance >= 500) return "Incredible run!";
+
+  // Check if above median of top runs
+  const topRuns = save.topRuns || [];
+  if (topRuns.length >= 3) {
+    const sorted = topRuns.map(r => r.distance).sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (game.distance > median) return "You're getting better!";
+  }
+
+  // Deterministic pool pick (no flicker on re-render)
+  return MOTIV_POOL[game.distance % MOTIV_POOL.length];
+}
+
 // Animation timers
 let menuAnimTime = 0;
 let deathAnimTime = 0;
@@ -156,8 +182,7 @@ function renderConfirmDialog(ctx: CanvasRenderingContext2D, w: number, h: number
   if (!confirmDialog) return;
 
   // Dim background
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(0, 0, w, h);
+  drawVignette(ctx, w, h, 0.7);
 
   // Dialog box
   const dlgW = 260;
@@ -171,14 +196,14 @@ function renderConfirmDialog(ctx: CanvasRenderingContext2D, w: number, h: number
   roundRect(ctx, dlgX, dlgY, dlgW, dlgH, 12);
 
   // Title
-  ctx.font = 'bold 16px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 16px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = theme.ui.textColor;
   ctx.fillText(`Buy ${confirmDialog.itemName}?`, w / 2, dlgY + 30);
 
   // Price
-  ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 18px "Outfit", Arial, sans-serif';
   ctx.fillStyle = '#ffcc00';
   const priceStr = `${confirmDialog.price}`;
   const priceTextW = ctx.measureText(priceStr).width;
@@ -243,7 +268,7 @@ function drawCoinIcon(ctx: CanvasRenderingContext2D, x: number, y: number, size:
 }
 
 function drawCoinDisplay(ctx: CanvasRenderingContext2D, rightX: number, y: number, coins: number, _theme: GameTheme): void {
-  ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 18px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffcc00';
@@ -259,7 +284,12 @@ function drawCoinDisplay(ctx: CanvasRenderingContext2D, rightX: number, y: numbe
 export function renderMainMenu(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme): void {
   buttons = [];
 
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  // Soft vertical vignette instead of flat black overlay
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
+  bgGrad.addColorStop(0, 'rgba(0,0,0,0.1)');
+  bgGrad.addColorStop(0.4, 'rgba(0,0,0,0.4)');
+  bgGrad.addColorStop(1, 'rgba(0,0,0,0.85)');
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, w, h);
 
   const save = loadSave();
@@ -267,37 +297,47 @@ export function renderMainMenu(ctx: CanvasRenderingContext2D, w: number, h: numb
   // Top-right coin display
   drawCoinDisplay(ctx, w - 18, 28, save.coins, theme);
 
-  // Title
-  const titleY = h * 0.10;
-  const scale = 1 + Math.sin(titlePulse * 2) * 0.03;
+  // Arcade Title
+  const titleY = h * 0.12;
+  const scale = 1 + Math.sin(titlePulse * 2) * 0.04;
 
   ctx.save();
   ctx.translate(w / 2, titleY);
   ctx.scale(scale, scale);
   ctx.shadowColor = theme.ui.accentColor;
-  ctx.shadowBlur = 20;
+  ctx.shadowBlur = 30; // Intense glow
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 42px "Segoe UI", Arial, sans-serif';
+  ctx.font = '800 54px "Outfit", Arial, sans-serif'; // Bigger, bolder
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('WAVE RUNNER', 0, 0);
+
+  // Inner text highlight for premium feel
   ctx.shadowBlur = 0;
+  ctx.fillStyle = '#ffffff';
+  ctx.globalAlpha = 0.9;
+  ctx.fillText('WAVE RUNNER', 0, 0);
+  ctx.globalAlpha = 1.0;
+
   ctx.restore();
 
   // Subtitle
-  ctx.font = 'bold 15px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 15px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillStyle = theme.ui.textColor + 'aa';
   ctx.fillText('SELECT A GAME MODE', w / 2, titleY + 36);
 
   // ─── Mode cards ───
-  const cardGap = 10;
-  const maxCardW = 170;
-  const cardW = Math.min(maxCardW, (w - 40 - cardGap * 2) / 3);
-  const cardH = Math.min(210, h * 0.44);
+  // Increased card size and spacing for better visibility
+  const cardGap = 16;
+  const maxCardW = 210;
+  const cardW = Math.min(maxCardW, (w - 60 - cardGap * 2) / 3);
+  const cardH = Math.min(260, h * 0.50);
   const totalW = cardW * 3 + cardGap * 2;
   const startX = (w - totalW) / 2;
-  const cardY = titleY + 60;
+
+  // Push cards slightly further down to give the glowing title more breathing room
+  const cardY = titleY + 75;
 
   const animDelay1 = Math.max(0, menuAnimTime - 0.0);
   const animDelay2 = Math.max(0, menuAnimTime - 0.08);
@@ -380,7 +420,7 @@ export function renderMainMenu(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.globalAlpha = 1;
 
   // Hint at very bottom
-  ctx.font = '12px "Segoe UI", Arial, sans-serif';
+  ctx.font = '12px "Outfit", Arial, sans-serif';
   ctx.fillStyle = theme.ui.textColor + '50';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
@@ -427,36 +467,42 @@ function drawModeCard(
   const cx = x + w / 2;
 
   // Icon
-  const iconY = y + h * 0.22;
+  const iconY = y + h * 0.25;
   ctx.fillStyle = disabled ? theme.ui.textColor + '30' : accent;
   ctx.strokeStyle = disabled ? theme.ui.textColor + '20' : accent;
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 3.5; // Thicker icons
+
+  ctx.save();
+  ctx.translate(cx, iconY);
+  ctx.scale(1.2, 1.2); // Bigger icons
+  ctx.translate(-cx, -iconY);
   drawModeIcon(ctx, cx, iconY, iconType, disabled);
+  ctx.restore();
 
   // Title
-  ctx.font = 'bold 16px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 22px "Outfit", Arial, sans-serif'; // Bigger title
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = disabled ? theme.ui.textColor + '40' : theme.ui.textColor;
-  ctx.fillText(title, cx, y + h * 0.42);
+  ctx.fillText(title, cx, y + h * 0.46);
 
   // Description
-  ctx.font = '11px "Segoe UI", Arial, sans-serif';
+  ctx.font = '13px "Outfit", Arial, sans-serif'; // Bigger desc
   ctx.fillStyle = disabled ? theme.ui.textColor + '25' : theme.ui.textColor + '70';
-  ctx.fillText(desc, cx, y + h * 0.54);
+  ctx.fillText(desc, cx, y + h * 0.58);
 
   // Info line
   if (info) {
-    ctx.font = 'bold 13px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 15px "Outfit", Arial, sans-serif'; // Bigger info
     ctx.fillStyle = disabled ? theme.ui.textColor + '20' : accent + 'cc';
-    ctx.fillText(info, cx, y + h * 0.66);
+    ctx.fillText(info, cx, y + h * 0.70);
   }
 
   // Button
-  const btnW = Math.min(w - 20, 130);
-  const btnH = 32;
+  const btnW = Math.min(w - 30, 150); // Wider button
+  const btnH = 38; // Taller button
   const btnX = cx - btnW / 2;
-  const btnY = y + h - btnH - 14;
+  const btnY = y + h - btnH - 18;
 
   if (disabled) {
     ctx.fillStyle = theme.ui.textColor + '08';
@@ -466,14 +512,17 @@ function drawModeCard(
     ctx.strokeStyle = accent + '80';
   }
   ctx.lineWidth = 1.5;
-  roundRect(ctx, btnX, btnY, btnW, btnH, 6);
+  roundRect(ctx, btnX, btnY, btnW, btnH, 8);
 
-  ctx.font = 'bold 13px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 15px "Outfit", Arial, sans-serif';
   ctx.fillStyle = disabled ? theme.ui.textColor + '30' : theme.ui.textColor;
   ctx.fillText(buttonLabel, cx, btnY + btnH / 2);
 
   if (!disabled && action) {
+    // Small button is clickable
     buttons.push({ x: btnX, y: btnY, w: btnW, h: btnH, action });
+    // Entire card is also clickable
+    buttons.push({ x, y, w, h, action });
   }
 }
 
@@ -534,7 +583,12 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
   const progress = Math.min(1, deathAnimTime * 2);
   const alpha = easeOutCubic(progress);
 
-  ctx.fillStyle = `rgba(0,0,0,${alpha * 0.6})`;
+  // Radial vignette overlay instead of flat black
+  const vigGrad = ctx.createRadialGradient(w / 2, h * 0.35, Math.min(w, h) * 0.15, w / 2, h * 0.5, Math.max(w, h) * 0.8);
+  vigGrad.addColorStop(0, `rgba(0,0,0,${alpha * 0.35})`);
+  vigGrad.addColorStop(0.5, `rgba(0,0,0,${alpha * 0.55})`);
+  vigGrad.addColorStop(1, `rgba(0,0,0,${alpha * 0.8})`);
+  ctx.fillStyle = vigGrad;
   ctx.fillRect(0, 0, w, h);
 
   ctx.globalAlpha = alpha;
@@ -543,7 +597,7 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
   ctx.shadowColor = theme.ui.accentColor;
   ctx.shadowBlur = 15;
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 40px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 40px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const isClassicComplete = game.classicComplete;
@@ -554,14 +608,14 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
   const countUpT = Math.min(1, deathAnimTime / 1.0);
   const countUpEase = easeOutCubic(countUpT);
   const displayDist = Math.floor(game.distance * countUpEase);
-  ctx.font = 'bold 56px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 56px "Outfit", Arial, sans-serif';
   ctx.fillStyle = theme.ui.accentColor;
   ctx.fillText(`${displayDist}m`, w / 2, centerY + 65);
 
   // Coins collected this run (count-up slightly delayed)
   const coinCountT = Math.min(1, Math.max(0, (deathAnimTime - 0.3)) / 0.7);
   const displayCoins = Math.floor(game.coinsCollected * easeOutCubic(coinCountT));
-  ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 20px "Outfit", Arial, sans-serif';
   ctx.fillStyle = '#ffcc00';
   const coinText = `+${displayCoins}`;
   const coinTextW = ctx.measureText(coinText).width;
@@ -573,7 +627,7 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
     const level = LEVELS[game.classicLevelIndex];
     const save = loadSave();
     const stars = save.levelStars[level.id] || 0;
-    ctx.font = '28px "Segoe UI", Arial, sans-serif';
+    ctx.font = '28px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     for (let s = 0; s < 3; s++) {
       ctx.fillStyle = s < stars ? '#ffcc00' : theme.ui.textColor + '30';
@@ -584,7 +638,7 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
     ctx.save();
     ctx.translate(w / 2, centerY + 135);
     ctx.scale(pulse, pulse);
-    ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 20px "Outfit", Arial, sans-serif';
     ctx.fillStyle = '#ffcc00';
     ctx.shadowColor = '#ffcc00';
     ctx.shadowBlur = 10;
@@ -592,39 +646,64 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
     ctx.shadowBlur = 0;
     ctx.restore();
   } else {
-    ctx.font = '16px "Segoe UI", Arial, sans-serif';
+    ctx.font = '16px "Outfit", Arial, sans-serif';
     ctx.fillStyle = theme.ui.textColor + 'aa';
     ctx.fillText(`Best: ${game.highScore}m`, w / 2, centerY + 135);
   }
 
-  // Buttons
+  // Best combo display
+  let comboOffset = 0;
+  if (game.bestCombo >= 2) {
+    comboOffset = 18;
+    ctx.font = 'bold 14px "Outfit", Arial, sans-serif';
+    ctx.fillStyle = theme.ui.accentColor;
+    ctx.fillText(`Best Combo: x${game.bestCombo}`, w / 2, centerY + 155);
+  }
+
+  // Motivational message
+  const motivMsg = getMotivationalMessage(game);
+  if (motivMsg && deathAnimTime > 0.8) {
+    const msgAlpha = Math.min(1, (deathAnimTime - 0.8) / 0.5);
+    ctx.save();
+    ctx.globalAlpha = alpha * msgAlpha;
+    ctx.font = 'bold 16px "Outfit", Arial, sans-serif';
+    ctx.fillStyle = theme.ui.accentColor;
+    ctx.shadowColor = theme.ui.accentColor;
+    ctx.shadowBlur = 6;
+    ctx.fillText(motivMsg, w / 2, centerY + 158 + comboOffset);
+    ctx.restore();
+  }
+
+  // Buttons — dynamic spacing for small screens
   if (deathAnimTime > 0.5) {
     const btnW = 200;
-    const btnH = 48;
+    const compact = h < 450;
+    const btnH = compact ? 40 : 48;
+    const btnGap = compact ? 46 : 58;
     const btnX = w / 2 - btnW / 2;
-    const btnY = h * 0.6;
+    const btnY = Math.max(centerY + 180 + comboOffset, h * 0.55);
 
     drawButton(ctx, btnX, btnY, btnW, btnH, 'Retry', theme, true);
     buttons.push({ x: btnX, y: btnY, w: btnW, h: btnH, action: 'retry' });
 
-    drawButton(ctx, btnX, btnY + 58, btnW, btnH, 'Main Menu', theme, false);
-    buttons.push({ x: btnX, y: btnY + 58, w: btnW, h: btnH, action: 'menu' });
+    drawButton(ctx, btnX, btnY + btnGap, btnW, btnH, 'Main Menu', theme, false);
+    buttons.push({ x: btnX, y: btnY + btnGap, w: btnW, h: btnH, action: 'menu' });
 
     // Rewarded ad button
-    drawButton(ctx, btnX, btnY + 116, btnW, btnH, '+50 Watch Ad', theme, false);
-    buttons.push({ x: btnX, y: btnY + 116, w: btnW, h: btnH, action: 'rewarded_ad' });
+    drawButton(ctx, btnX, btnY + btnGap * 2, btnW, btnH, '+50 Watch Ad', theme, false);
+    buttons.push({ x: btnX, y: btnY + btnGap * 2, w: btnW, h: btnH, action: 'rewarded_ad' });
 
-    // Top runs leaderboard (compact, below buttons)
+    // Top runs leaderboard (compact, below buttons — hide on very small screens)
     const save = loadSave();
     const topRuns = save.topRuns || [];
-    if (topRuns.length > 0) {
-      const lbY = btnY + 180;
-      ctx.font = 'bold 12px "Segoe UI", Arial, sans-serif';
+    if (topRuns.length > 0 && h >= 400) {
+      const lbY = btnY + btnGap * 2 + btnH + 16;
+      ctx.font = 'bold 12px "Outfit", Arial, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = theme.ui.textColor + '80';
       ctx.fillText('TOP RUNS', w / 2, lbY);
 
-      ctx.font = '11px "Segoe UI", Arial, sans-serif';
+      ctx.font = '11px "Outfit", Arial, sans-serif';
       const showCount = Math.min(5, topRuns.length);
       for (let i = 0; i < showCount; i++) {
         const run = topRuns[i];
@@ -650,11 +729,10 @@ export function renderGameOverScreen(ctx: CanvasRenderingContext2D, w: number, h
 export function renderPauseScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme): void {
   buttons = [];
 
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(0, 0, w, h);
+  drawVignette(ctx, w, h, 0.65);
 
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 36px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 36px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('PAUSED', w / 2, h * 0.35);
@@ -675,49 +753,56 @@ export function renderPauseScreen(ctx: CanvasRenderingContext2D, w: number, h: n
 export function renderSettingsScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme, settings: { musicVolume: number; sfxVolume: number; particles: boolean; screenShake: boolean }): void {
   buttons = [];
 
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(0, 0, w, h);
+  drawVignette(ctx, w, h, 0.85);
 
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 30px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 30px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('SETTINGS', w / 2, h * 0.18);
 
   const startY = h * 0.26;
   const gap = 50;
-  ctx.font = '18px "Segoe UI", Arial, sans-serif';
+  ctx.font = '18px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'left';
 
   const toggleX = w / 2 + 60;
+  const labelX = w / 2 - 100;
+  const dividerW = 220;
+  const dividerX = w / 2 - dividerW / 2;
   let row = 0;
 
-  // Music
-  ctx.fillStyle = theme.ui.textColor;
-  ctx.fillText('Music', w / 2 - 100, startY + row * gap + 8);
-  drawToggle(ctx, toggleX, startY + row * gap - 5, settings.musicVolume > 0, theme);
-  buttons.push({ x: toggleX, y: startY + row * gap - 5, w: 50, h: 26, action: 'toggle_music' });
-  row++;
+  // Helper to draw a setting row with divider
+  const drawSettingRow = (label: string, on: boolean, action: string) => {
+    const ry = startY + row * gap;
+    ctx.fillStyle = theme.ui.textColor;
+    ctx.font = '18px "Outfit", Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, labelX, ry + 8);
+    drawToggle(ctx, toggleX, ry - 5, on, theme);
+    buttons.push({ x: toggleX, y: ry - 5, w: 50, h: 26, action });
+    // Divider line
+    ctx.fillStyle = theme.ui.textColor + '12';
+    ctx.fillRect(dividerX, ry + 30, dividerW, 1);
+    row++;
+  };
 
-  // SFX
-  ctx.fillStyle = theme.ui.textColor;
-  ctx.fillText('Sound FX', w / 2 - 100, startY + row * gap + 8);
-  drawToggle(ctx, toggleX, startY + row * gap - 5, settings.sfxVolume > 0, theme);
-  buttons.push({ x: toggleX, y: startY + row * gap - 5, w: 50, h: 26, action: 'toggle_sfx' });
-  row++;
+  drawSettingRow('Music', settings.musicVolume > 0, 'toggle_music');
+  drawSettingRow('Sound FX', settings.sfxVolume > 0, 'toggle_sfx');
+  drawSettingRow('Particles', settings.particles, 'toggle_particles');
+  drawSettingRow('Screen Shake', settings.screenShake, 'toggle_shake');
 
-  // Particles
+  // Fullscreen — separated visually with section label
+  const fsY = startY + row * gap;
+  ctx.fillStyle = theme.ui.textColor + '50';
+  ctx.font = 'bold 11px "Outfit", Arial, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('DISPLAY', labelX, fsY - 8);
   ctx.fillStyle = theme.ui.textColor;
-  ctx.fillText('Particles', w / 2 - 100, startY + row * gap + 8);
-  drawToggle(ctx, toggleX, startY + row * gap - 5, settings.particles, theme);
-  buttons.push({ x: toggleX, y: startY + row * gap - 5, w: 50, h: 26, action: 'toggle_particles' });
-  row++;
-
-  // Screen Shake
-  ctx.fillStyle = theme.ui.textColor;
-  ctx.fillText('Screen Shake', w / 2 - 100, startY + row * gap + 8);
-  drawToggle(ctx, toggleX, startY + row * gap - 5, settings.screenShake, theme);
-  buttons.push({ x: toggleX, y: startY + row * gap - 5, w: 50, h: 26, action: 'toggle_shake' });
+  ctx.font = '18px "Outfit", Arial, sans-serif';
+  ctx.fillText('Fullscreen', labelX, fsY + 14);
+  drawToggle(ctx, toggleX, fsY + 1, !!document.fullscreenElement, theme);
+  buttons.push({ x: toggleX, y: fsY + 1, w: 50, h: 26, action: 'toggle_fullscreen' });
 
   const btnW = 160;
   const btnH = 44;
@@ -730,8 +815,7 @@ export function renderSettingsScreen(ctx: CanvasRenderingContext2D, w: number, h
 export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme): void {
   buttons = [];
 
-  ctx.fillStyle = 'rgba(0,0,0,0.80)';
-  ctx.fillRect(0, 0, w, h);
+  drawVignette(ctx, w, h, 0.88);
 
   const save = loadSave();
 
@@ -759,7 +843,7 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
 
   // Title
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 24px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 24px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText('SHOP', backX + backBtnSize + 12, backY + backBtnSize / 2);
@@ -780,7 +864,7 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
   ctx.strokeStyle = skinTabActive ? theme.ui.accentColor : theme.ui.textColor + '25';
   ctx.lineWidth = skinTabActive ? 2 : 1;
   roundRect(ctx, tabStartX, tabY, tabW, tabH, 6);
-  ctx.font = `bold 13px "Segoe UI", Arial, sans-serif`;
+  ctx.font = `bold 13px "Outfit", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = skinTabActive ? theme.ui.accentColor : theme.ui.textColor + '80';
@@ -793,7 +877,7 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
   ctx.strokeStyle = trailTabActive ? theme.ui.accentColor : theme.ui.textColor + '25';
   ctx.lineWidth = trailTabActive ? 2 : 1;
   roundRect(ctx, tabStartX + tabW + tabGap, tabY, tabW, tabH, 6);
-  ctx.font = `bold 13px "Segoe UI", Arial, sans-serif`;
+  ctx.font = `bold 13px "Outfit", Arial, sans-serif`;
   ctx.fillStyle = trailTabActive ? theme.ui.accentColor : theme.ui.textColor + '80';
   ctx.fillText('TRAILS', tabStartX + tabW + tabGap + tabW / 2, tabY + tabH / 2);
   buttons.push({ x: tabStartX + tabW + tabGap, y: tabY, w: tabW, h: tabH, action: 'tab_trails' });
@@ -875,29 +959,29 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
     ctx.restore();
 
     // Name
-    ctx.font = 'bold 12px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 12px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = theme.ui.textColor;
     ctx.fillText(item.name, cx, cy + 14);
 
     // Rarity label
-    ctx.font = '9px "Segoe UI", Arial, sans-serif';
+    ctx.font = '9px "Outfit", Arial, sans-serif';
     ctx.fillStyle = rarityColor;
     ctx.fillText(rarity.toUpperCase(), cx, cy + 25);
 
     // Price / status
     const statusY = cy + 36;
     if (isSelected) {
-      ctx.font = 'bold 11px "Segoe UI", Arial, sans-serif';
+      ctx.font = 'bold 11px "Outfit", Arial, sans-serif';
       ctx.fillStyle = theme.ui.accentColor;
       ctx.fillText('EQUIPPED', cx, statusY);
     } else if (isOwned) {
-      ctx.font = '11px "Segoe UI", Arial, sans-serif';
+      ctx.font = '11px "Outfit", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor + '60';
       ctx.fillText('OWNED', cx, statusY);
     } else if (item.price === 0) {
-      ctx.font = 'bold 11px "Segoe UI", Arial, sans-serif';
+      ctx.font = 'bold 11px "Outfit", Arial, sans-serif';
       ctx.fillStyle = '#44cc88';
       ctx.fillText('FREE', cx, statusY);
     } else {
@@ -906,7 +990,7 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
       const shakeOffsetX = isShaking ? Math.sin(priceShakeTimer * 40) * 4 : 0;
       const cantAfford = save.coins < item.price;
 
-      ctx.font = 'bold 13px "Segoe UI", Arial, sans-serif';
+      ctx.font = 'bold 13px "Outfit", Arial, sans-serif';
       ctx.fillStyle = cantAfford ? '#ff6644' : '#ffcc00';
       const priceStr = `${item.price}`;
       const priceW = ctx.measureText(priceStr).width;
@@ -949,13 +1033,12 @@ export function renderShopScreen(ctx: CanvasRenderingContext2D, w: number, h: nu
 export function renderLevelSelectScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme): void {
   buttons = [];
 
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0, 0, w, h);
+  drawVignette(ctx, w, h, 0.85);
 
   const save = loadSave();
 
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 30px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 30px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('SELECT LEVEL', w / 2, h * 0.08);
@@ -988,22 +1071,22 @@ export function renderLevelSelectScreen(ctx: CanvasRenderingContext2D, w: number
 
     if (unlocked) {
       // Level number
-      ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
+      ctx.font = 'bold 20px "Outfit", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor;
       ctx.fillText(`${i + 1}`, cx, cy - 20);
 
       // Level name
-      ctx.font = '10px "Segoe UI", Arial, sans-serif';
+      ctx.font = '10px "Outfit", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor + '90';
       ctx.fillText(level.name, cx, cy - 6);
 
       // Target distance
-      ctx.font = '9px "Segoe UI", Arial, sans-serif';
+      ctx.font = '9px "Outfit", Arial, sans-serif';
       ctx.fillStyle = theme.ui.accentColor + 'aa';
       ctx.fillText(`${level.targetDistance}m`, cx, cy + 8);
 
       // Stars
-      ctx.font = '14px "Segoe UI", Arial, sans-serif';
+      ctx.font = '14px "Outfit", Arial, sans-serif';
       for (let s = 0; s < 3; s++) {
         ctx.fillStyle = s < stars ? '#ffcc00' : theme.ui.textColor + '30';
         ctx.fillText(s < stars ? '\u2605' : '\u2606', cx - 14 + s * 14, cy + 26);
@@ -1012,10 +1095,10 @@ export function renderLevelSelectScreen(ctx: CanvasRenderingContext2D, w: number
       buttons.push({ x: cx - cw / 2, y: cy - ch / 2, w: cw, h: ch, action: `level_${i}` });
     } else {
       // Locked
-      ctx.font = '20px "Segoe UI", Arial, sans-serif';
+      ctx.font = '20px "Outfit", Arial, sans-serif';
       ctx.fillStyle = theme.ui.textColor + '30';
       ctx.fillText('\u{1F512}', cx, cy - 5);
-      ctx.font = '10px "Segoe UI", Arial, sans-serif';
+      ctx.font = '10px "Outfit", Arial, sans-serif';
       ctx.fillText(level.name, cx, cy + 14);
     }
   }
@@ -1032,8 +1115,7 @@ export function renderLevelSelectScreen(ctx: CanvasRenderingContext2D, w: number
 export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: number, h: number, theme: GameTheme): void {
   buttons = [];
 
-  ctx.fillStyle = 'rgba(0,0,0,0.80)';
-  ctx.fillRect(0, 0, w, h);
+  drawVignette(ctx, w, h, 0.88);
 
   const save = loadSave();
 
@@ -1056,7 +1138,7 @@ export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: numbe
   buttons.push({ x: backX, y: backY, w: backBtnSize, h: backBtnSize, action: 'back' });
 
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 24px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 24px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText('ACHIEVEMENTS', backX + backBtnSize + 12, backY + backBtnSize / 2);
@@ -1064,7 +1146,7 @@ export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: numbe
   // Progress count
   const unlocked = save.achievements.length;
   const total = ACHIEVEMENTS.length;
-  ctx.font = '14px "Segoe UI", Arial, sans-serif';
+  ctx.font = '14px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'right';
   ctx.fillStyle = theme.ui.accentColor;
   ctx.fillText(`${unlocked}/${total}`, w - 18, backY + backBtnSize / 2);
@@ -1101,7 +1183,7 @@ export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: numbe
     roundRect(ctx, cx - cellW / 2 + 4, cy - cellH / 2 + 2, cellW - 8, cellH - 4, 6);
 
     // Icon
-    ctx.font = '20px "Segoe UI", Arial, sans-serif';
+    ctx.font = '20px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = isUnlocked ? theme.ui.accentColor : theme.ui.textColor + '30';
@@ -1109,11 +1191,11 @@ export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: numbe
 
     // Name & desc
     ctx.textAlign = 'left';
-    ctx.font = 'bold 13px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 13px "Outfit", Arial, sans-serif';
     ctx.fillStyle = isUnlocked ? theme.ui.textColor : theme.ui.textColor + '40';
     ctx.fillText(ach.name, cx - cellW / 2 + 46, cy - 8);
 
-    ctx.font = '11px "Segoe UI", Arial, sans-serif';
+    ctx.font = '11px "Outfit", Arial, sans-serif';
     ctx.fillStyle = isUnlocked ? theme.ui.textColor + '80' : theme.ui.textColor + '25';
     ctx.fillText(ach.desc, cx - cellW / 2 + 46, cy + 10);
   }
@@ -1123,6 +1205,15 @@ export function renderAchievementsScreen(ctx: CanvasRenderingContext2D, w: numbe
 
 // ─── DRAWING HELPERS ─────────────────────────────────────
 
+function drawVignette(ctx: CanvasRenderingContext2D, w: number, h: number, alpha: number): void {
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
+  bgGrad.addColorStop(0, `rgba(0,0,0,${alpha * 0.2})`);
+  bgGrad.addColorStop(0.5, `rgba(0,0,0,${alpha * 0.6})`);
+  bgGrad.addColorStop(1, `rgba(0,0,0,${alpha})`);
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, w, h);
+}
+
 function drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, label: string, theme: GameTheme, primary: boolean): void {
   const isHovered = hoverX >= x && hoverX <= x + w && hoverY >= y && hoverY <= y + h;
 
@@ -1130,22 +1221,44 @@ function drawButton(ctx: CanvasRenderingContext2D, x: number, y: number, w: numb
     ctx.save();
     const cx = x + w / 2, cy = y + h / 2;
     ctx.translate(cx, cy);
-    ctx.scale(1.04, 1.04);
+    ctx.scale(1.05, 1.05); // Stronger pop
     ctx.translate(-cx, -cy);
   }
 
-  ctx.fillStyle = primary
-    ? theme.ui.accentColor + (isHovered ? '60' : '40')
-    : theme.ui.textColor + (isHovered ? '25' : '15');
-  ctx.strokeStyle = primary ? theme.ui.accentColor : theme.ui.textColor + '60';
-  ctx.lineWidth = 2;
-  roundRect(ctx, x, y, w, h, 8);
+  const r = h / 2; // Pill shape
 
+  if (isHovered) {
+    ctx.shadowColor = primary ? theme.ui.accentColor : theme.ui.textColor;
+    ctx.shadowBlur = primary ? 20 : 12;
+  }
+
+  const gradient = ctx.createLinearGradient(x, y, x, y + h);
+  if (primary) {
+    gradient.addColorStop(0, theme.ui.accentColor + (isHovered ? '85' : '55'));
+    gradient.addColorStop(1, theme.ui.accentColor + (isHovered ? '45' : '25'));
+  } else {
+    gradient.addColorStop(0, theme.ui.textColor + (isHovered ? '35' : '15'));
+    gradient.addColorStop(1, theme.ui.textColor + (isHovered ? '10' : '05'));
+  }
+
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = primary ? theme.ui.accentColor : theme.ui.textColor + '50';
+  ctx.lineWidth = 2;
+  roundRect(ctx, x, y, w, h, r);
+
+  ctx.shadowBlur = 0; // Reset shadow for text
+
+  if (primary && isHovered) {
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 8;
+  }
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 18px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, x + w / 2, y + h / 2);
+
+  if (primary && isHovered) ctx.shadowBlur = 0; // Reset shadow
 
   if (isHovered) ctx.restore();
 }

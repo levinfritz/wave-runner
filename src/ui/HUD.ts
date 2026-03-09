@@ -10,12 +10,21 @@ interface FloatingText {
   color: string;
   life: number;
   maxLife: number;
+  tag?: string;
 }
 
 const floatingTexts: FloatingText[] = [];
 
-export function addFloatingText(text: string, screenX: number, screenY: number, color: string): void {
-  floatingTexts.push({ text, x: screenX, y: screenY, color, life: 0.8, maxLife: 0.8 });
+export function addFloatingText(text: string, screenX: number, screenY: number, color: string, tag?: string): void {
+  // If tagged, replace any existing text with same tag to prevent spam
+  if (tag) {
+    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+      if (floatingTexts[i].tag === tag) {
+        floatingTexts.splice(i, 1);
+      }
+    }
+  }
+  floatingTexts.push({ text, x: screenX, y: screenY, color, life: 0.8, maxLife: 0.8, tag });
 }
 
 // ─── Toast System ──────────────────────────────────────
@@ -23,6 +32,7 @@ export function addFloatingText(text: string, screenX: number, screenY: number, 
 interface Toast {
   title: string;
   subtitle: string;
+  icon: string;
   timer: number;
 }
 
@@ -31,8 +41,8 @@ let activeToast: Toast | null = null;
 const TOAST_DURATION = 3;
 const TOAST_SLIDE_TIME = 0.3;
 
-export function showToast(title: string, subtitle = ''): void {
-  toastQueue.push({ title, subtitle, timer: TOAST_DURATION });
+export function showToast(title: string, subtitle = '', icon = ''): void {
+  toastQueue.push({ title, subtitle, icon, timer: TOAST_DURATION });
 }
 
 // ─── Speed Lines State ─────────────────────────────────
@@ -87,12 +97,12 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
     ctx.quadraticCurveTo(tutX, tutY, tutX + 8, tutY);
     ctx.closePath();
     ctx.fill();
-    ctx.font = 'bold 16px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 16px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffffff';
     ctx.fillText('Hold SPACE / Tap to fly up', game.width / 2, tutY + 18);
-    ctx.font = '13px "Segoe UI", Arial, sans-serif';
+    ctx.font = '13px "Outfit", Arial, sans-serif';
     ctx.fillStyle = '#ffffffaa';
     ctx.fillText('Release to fall down', game.width / 2, tutY + 36);
     ctx.restore();
@@ -101,14 +111,18 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   const w = game.width;
   const h = game.height;
 
-  // Pause button - top left
-  ctx.fillStyle = theme.ui.textColor + '80';
-  ctx.fillRect(16, 16, 6, 18);
-  ctx.fillRect(26, 16, 6, 18);
+  // Pause button - top left (circle backdrop for mobile tap target)
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.arc(25, 25, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = theme.ui.textColor + 'cc';
+  ctx.fillRect(18, 16, 5, 18);
+  ctx.fillRect(27, 16, 5, 18);
 
   // Distance counter - top center
   ctx.fillStyle = theme.ui.textColor;
-  ctx.font = 'bold 28px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 28px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
@@ -141,7 +155,7 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   }
 
   // Coins - top right
-  ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 18px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'right';
   ctx.fillStyle = '#ffcc00';
   ctx.shadowColor = '#ffcc00';
@@ -154,7 +168,7 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   ctx.fill();
 
   // Highscore - below coins
-  ctx.font = '14px "Segoe UI", Arial, sans-serif';
+  ctx.font = '14px "Outfit", Arial, sans-serif';
   ctx.fillStyle = theme.ui.accentColor;
   ctx.textAlign = 'right';
   ctx.fillText(`Best: ${game.highScore}m`, w - 20, 44);
@@ -198,7 +212,7 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   // Physics mode indicator - bottom left
   const mode = game.player.physicsMode;
   const modeColor = mode === 'wave' ? '#aa44ff' : '#4488ff';
-  ctx.font = 'bold 12px "Segoe UI", Arial, sans-serif';
+  ctx.font = 'bold 12px "Outfit", Arial, sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = modeColor;
@@ -222,11 +236,46 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
   }
   ctx.stroke();
 
+  // Near-miss combo counter — bottom center
+  if (game.nearMissCombo >= 2 && game.nearMissComboTimer > 0) {
+    const comboAlpha = game.nearMissComboTimer < 0.5 ? game.nearMissComboTimer / 0.5 : 1;
+    const pulse = 1 + Math.sin(game.gameTime * 8) * 0.08;
+    // Color escalation: white → cyan → gold
+    const combo = game.nearMissCombo;
+    const comboColor = combo >= 15 ? '#ffcc00' : combo >= 8 ? '#ff8844' : combo >= 4 ? '#00ccff' : '#ffffff';
+    // Size scales with combo (22px → 30px)
+    const fontSize = Math.min(30, 22 + combo * 0.8);
+    const comboText = `x${combo} CLOSE!`;
+    ctx.save();
+    ctx.globalAlpha = comboAlpha;
+    ctx.translate(w / 2, h - 50);
+    ctx.scale(pulse, pulse);
+    // Background pill
+    ctx.font = `bold ${fontSize}px "Outfit", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const pillW = ctx.measureText(comboText).width + 24;
+    const pillH = fontSize + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath();
+    const pr = pillH / 2;
+    ctx.arc(-pillW / 2 + pr, 0, pr, Math.PI * 0.5, Math.PI * 1.5);
+    ctx.arc(pillW / 2 - pr, 0, pr, Math.PI * 1.5, Math.PI * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    // Text
+    ctx.fillStyle = comboColor;
+    ctx.shadowColor = comboColor;
+    ctx.shadowBlur = 12;
+    ctx.fillText(comboText, 0, 0);
+    ctx.restore();
+  }
+
   // Theme name (subtle, during transitions)
   if (game.themeManager.isTransitioning) {
     const alpha = Math.sin(game.themeManager.progress * Math.PI);
     ctx.globalAlpha = alpha * 0.5;
-    ctx.font = '14px "Segoe UI", Arial, sans-serif';
+    ctx.font = '14px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = theme.ui.textColor;
     ctx.fillText(theme.name, w / 2, 55 + (game.mode === 'classic' ? 12 : 0));
@@ -238,7 +287,7 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
     const alpha = ft.life / ft.maxLife;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.font = 'bold 16px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 16px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = ft.color;
@@ -264,10 +313,12 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
       slideY = -60 * (1 - progress);
     }
 
+    const hasIcon = activeToast.icon.length > 0;
     const toastW = 280;
     const toastH = activeToast.subtitle ? 52 : 36;
     const toastX = w / 2 - toastW / 2;
     const toastY = 8 + slideY;
+    const contentOffsetX = hasIcon ? 14 : 0;
 
     ctx.save();
     // Background
@@ -288,21 +339,30 @@ export function renderHUD(ctx: CanvasRenderingContext2D, game: Game, theme: Game
     ctx.fill();
     ctx.stroke();
 
+    // Icon (large, left side)
+    if (hasIcon) {
+      ctx.font = '22px "Outfit", Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillText(activeToast.icon, toastX + 24, toastY + toastH / 2);
+    }
+
     // Title
     ctx.fillStyle = '#ffcc00';
-    ctx.font = 'bold 14px "Segoe UI", Arial, sans-serif';
+    ctx.font = 'bold 14px "Outfit", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.shadowColor = '#ffcc00';
     ctx.shadowBlur = 4;
-    ctx.fillText(activeToast.title, w / 2, toastY + (activeToast.subtitle ? 16 : toastH / 2));
+    ctx.fillText(activeToast.title, w / 2 + contentOffsetX, toastY + (activeToast.subtitle ? 16 : toastH / 2));
     ctx.shadowBlur = 0;
 
     // Subtitle
     if (activeToast.subtitle) {
       ctx.fillStyle = '#ffffffcc';
-      ctx.font = '12px "Segoe UI", Arial, sans-serif';
-      ctx.fillText(activeToast.subtitle, w / 2, toastY + 36);
+      ctx.font = '12px "Outfit", Arial, sans-serif';
+      ctx.fillText(activeToast.subtitle, w / 2 + contentOffsetX, toastY + 36);
     }
     ctx.restore();
   }

@@ -166,7 +166,7 @@ function handleAction(action: string): void {
   }
 
   // Level start
-  if (action.startsWith('level_')) {
+  if (action.startsWith('level_') && action !== 'level_select') {
     const levelIdx = parseInt(action.slice(6), 10);
     const level = LEVELS[levelIdx];
     if (!level) return;
@@ -254,6 +254,13 @@ function handleAction(action: string): void {
       updateSettings({ screenShake: !sk.screenShake });
       break;
     }
+    case 'toggle_fullscreen':
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      } else {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+      break;
     case 'tab_skins':
       setShopTab('skins');
       break;
@@ -377,7 +384,7 @@ game.onStateChange = (state) => {
           const ach = ACHIEVEMENTS.find(a => a.id === achId);
           if (ach) {
             game.audio.playSFX('achievement_unlock');
-            showToast(`${ach.icon} ${ach.name}`, ach.desc);
+            showToast(ach.name, ach.desc, ach.icon);
           }
         }
       }
